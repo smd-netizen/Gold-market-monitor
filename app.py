@@ -1,6 +1,8 @@
 import os
 import time
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
+from urllib.parse import quote
 
 import feedparser
 import pandas as pd
@@ -24,11 +26,9 @@ st.set_page_config(
 # CONSTANTS
 # ============================================================
 
-FRED_DGS10_URL = (
-    "https://fred.stlouisfed.org/graph/fredgraph.csv?id=DGS10"
-)
-
 NEWS_MAX_AGE_HOURS = 48
+
+EASTERN = ZoneInfo("America/New_York")
 
 REQUEST_HEADERS = {
     "User-Agent": (
@@ -43,46 +43,27 @@ REQUEST_HEADERS = {
 # MARKET DATA
 # ============================================================
 
-def yf_quote(ticker):
+def yf_quote(ticker, multiplier=1.0):
     """
-    Get the latest Yahoo Finance quote and calculate the
-    change versus the previous trading day's close.
+    Get the latest Yahoo Finance price.
+
+    multiplier is used for instruments such as ^TNX,
+    which Yahoo quotes approximately 10x the actual
+    Treasury yield.
+
+    Returns:
+        price
+        previous_close
+        change
+        pct
     """
 
     try:
+
         stock = yf.Ticker(ticker)
 
         # ----------------------------------------------------
-        # Get recent daily data.
-        # This lets us compare today's/latest price against
-        # the previous trading day's close.
-        # ----------------------------------------------------
-
-        daily = stock.history(
-            period="5d",
-            interval="1d",
-            auto_adjust=False
-        )
-
-        if daily.empty or "Close" not in daily.columns:
-            return {
-                "error": "No daily quote data returned."
-            }
-
-        closes = pd.to_numeric(
-            daily["Close"],
-            errors="coerce"
-        ).dropna()
-
-        if closes.empty:
-            return {
-                "error": "No valid closing prices returned."
-            }
-
-        latest_daily_close = float(closes.iloc[-1])
-
-        # ----------------------------------------------------
-        # Try to get an intraday price.
+        # Intraday data
         # ----------------------------------------------------
 
         intraday = stock.history(
@@ -96,51 +77,104 @@ def yf_quote(ticker):
             and "Close" in intraday.columns
         ):
 
-            intraday_closes = pd.to_numeric(
+            closes = pd.to_numeric(
                 intraday["Close"],
                 errors="coerce"
             ).dropna()
 
         else:
 
-            intraday_closes = pd.Series(dtype=float)
+            closes = pd.Series(
+                dtype=float
+            )
 
         # ----------------------------------------------------
-        # Determine current price.
+        # Latest price
         # ----------------------------------------------------
 
-        if not intraday_closes.empty:
+        if not closes.empty:
 
-            price = float(
-                intraday_closes.iloc[-1]
+            raw_price = float(
+                closes.iloc[-1]
             )
 
         else:
 
-            price = latest_daily_close
-
-        # ----------------------------------------------------
-        # Determine previous trading day's close.
-        #
-        # If we have more than one daily close, the second-last
-        # value is the previous trading day.
-        # ----------------------------------------------------
-
-        if len(closes) >= 2:
-
-            previous_close = float(
-                closes.iloc[-2]
+            # Fall back to daily data.
+            daily = stock.history(
+                period="5d",
+                interval="1d",
+                auto_adjust=False
             )
+
+            if (
+                daily.empty
+                or "Close" not in daily.columns
+            ):
+
+                return {
+                    "error": "No Yahoo Finance data returned."
+                }
+
+            daily_closes = pd.to_numeric(
+                daily["Close"],
+                errors="coerce"
+            ).dropna()
+
+            if daily_closes.empty:
+
+                return {
+                    "error": "No valid price data returned."
+                }
+
+            raw_price = float(
+                daily_closes.iloc[-1]
+            )
+
+        # ----------------------------------------------------
+        # Previous trading day close
+        # ----------------------------------------------------
+
+        daily = stock.history(
+            period="5d",
+            interval="1d",
+            auto_adjust=False
+        )
+
+        if (
+            daily.empty
+            or "Close" not in daily.columns
+        ):
+
+            previous_raw = raw_price
 
         else:
 
-            previous_close = latest_daily_close
+            daily_closes = pd.to_numeric(
+                daily["Close"],
+                errors="coerce"
+            ).dropna()
+
+            if len(daily_closes) >= 2:
+
+                previous_raw = float(
+                    daily_closes.iloc[-2]
+                )
+
+            else:
+
+                previous_raw = raw_price
 
         # ----------------------------------------------------
-        # Calculate change.
+        # Apply multiplier
         # ----------------------------------------------------
 
-        change = price - previous_close
+        price = raw_price * multiplier
+        previous_close = previous_raw * multiplier
+
+        change = (
+            price - previous_close
+        )
 
         if previous_close != 0:
 
@@ -154,6 +188,7 @@ def yf_quote(ticker):
 
         return {
             "price": price,
+            "previous_close": previous_close,
             "change": change,
             "pct": pct
         }
@@ -169,155 +204,50 @@ def yf_quote(ticker):
 # 10-YEAR TREASURY
 # ============================================================
 
-def fred_series(series_id):
+def get_10y_treasury():
     """
-    Get the latest observation from a FRED daily series.
+    Get the 10-Year Treasury yield from Yahoo Finance.
 
-    DGS10 = 10-Year Treasury Constant Maturity Rate.
+    Yahoo's ^TNX quote is approximately 10x the actual
+    percentage yield.
+
+    Example:
+        Yahoo ^TNX = 46.8
+        Actual 10Y yield = 4.68%
     """
 
-    try:
+    result = yf_quote(
+        "^TNX",
+        multiplier=0.1
+    )
 
-        response = requests.get(
-            FRED_DGS10_URL,
-            headers=REQUEST_HEADERS,
-            timeout=15
-        )
-
-        response.raise_for_status()
-
-        from io import StringIO
-
-        df = pd.read_csv(
-            StringIO(response.text)
-        )
-
-        if series_id not in df.columns:
-
-            return {
-                "error": (
-                    f"FRED series {series_id} "
-                    "was not found."
-                )
-            }
-
-        df[series_id] = pd.to_numeric(
-            df[series_id],
-            errors="coerce"
-        )
-
-        df = df.dropna(
-            subset=[series_id]
-        )
-
-        if df.empty:
-
-            return {
-                "error": "No valid FRED observations returned."
-            }
-
-        latest = df.iloc[-1]
+    if not result or "price" not in result:
 
         return {
-            "value": float(
-                latest[series_id]
-            ),
-            "date": str(
-                latest["DATE"]
+            "error": (
+                result.get(
+                    "error",
+                    "10Y data unavailable."
+                )
+                if result
+                else "10Y data unavailable."
             )
         }
 
-    except Exception as e:
-
-        return {
-            "error": str(e)
-        }
+    return result
 
 
 # ============================================================
-# ECONOMIC CALENDAR
-# ============================================================
-
-def trading_economics_calendar():
-    """
-    Optional Trading Economics calendar.
-
-    If TE_API_KEY is not configured, the calendar simply
-    returns an empty dataframe.
-    """
-
-    key = os.getenv(
-        "TE_API_KEY",
-        ""
-    )
-
-    if not key:
-
-        return pd.DataFrame()
-
-    try:
-
-        today = datetime.now().date()
-
-        url = (
-            "https://api.tradingeconomics.com/"
-            "calendar/country/United%20States/"
-            "importance/3"
-        )
-
-        response = requests.get(
-            url,
-            params={
-                "c": key,
-                "d1": today,
-                "d2": today
-            },
-            timeout=10
-        )
-
-        response.raise_for_status()
-
-        data = response.json()
-
-        df = pd.DataFrame(data)
-
-        if df.empty:
-
-            return df
-
-        wanted_columns = [
-            "Date",
-            "Event",
-            "Actual",
-            "Forecast",
-            "Previous",
-            "Importance",
-            "Country"
-        ]
-
-        columns = [
-            column
-            for column in wanted_columns
-            if column in df.columns
-        ]
-
-        return df[columns]
-
-    except Exception:
-
-        return pd.DataFrame()
-
-
-# ============================================================
-# NEWS HELPERS
+# NEWS DATE PARSING
 # ============================================================
 
 def parse_news_date(value):
     """
-    Convert a feed/API date into a timezone-aware datetime.
+    Convert a news timestamp into a timezone-aware UTC datetime.
     """
 
     if not value:
+
         return None
 
     try:
@@ -339,21 +269,85 @@ def parse_news_date(value):
         return None
 
 
+def eastern_datetime(dt):
+    """
+    Convert a UTC datetime to Eastern Time.
+    """
+
+    if dt is None:
+
+        return None
+
+    return dt.astimezone(
+        EASTERN
+    )
+
+
+def article_age_text(dt):
+    """
+    Return a human-readable article age.
+    """
+
+    now = datetime.now(
+        timezone.utc
+    )
+
+    seconds = int(
+        (now - dt).total_seconds()
+    )
+
+    if seconds < 0:
+
+        seconds = 0
+
+    minutes = seconds // 60
+
+    if minutes < 1:
+
+        return "just now"
+
+    if minutes < 60:
+
+        return f"{minutes}m ago"
+
+    hours = minutes // 60
+    remaining_minutes = minutes % 60
+
+    if hours < 24:
+
+        if remaining_minutes == 0:
+
+            return f"{hours}h ago"
+
+        return (
+            f"{hours}h "
+            f"{remaining_minutes}m ago"
+        )
+
+    days = hours // 24
+
+    return f"{days}d ago"
+
+
+# ============================================================
+# NEWS TITLE CLEANUP
+# ============================================================
+
 def clean_title(title):
-    """
-    Remove common Google News source suffixes.
-    """
 
     if not title:
+
         return ""
 
-    title = str(title).strip()
+    title = str(
+        title
+    ).strip()
 
-    # Google News often formats headlines like:
+    # Google News frequently appends:
     #
-    # "Gold rises today - Reuters"
+    # " - Reuters"
     #
-    # Remove the source suffix when possible.
+    # Remove that suffix.
 
     if " - " in title:
 
@@ -364,7 +358,9 @@ def clean_title(title):
 
         if len(parts) == 2:
 
-            possible_source = parts[1].strip()
+            possible_source = (
+                parts[1].strip()
+            )
 
             if (
                 len(possible_source) < 60
@@ -376,6 +372,10 @@ def clean_title(title):
     return title
 
 
+# ============================================================
+# ADD NEWS ARTICLE
+# ============================================================
+
 def add_article(
     articles,
     published,
@@ -383,11 +383,10 @@ def add_article(
     link,
     source=""
 ):
-    """
-    Add an article only if it is recent and valid.
-    """
 
-    title = clean_title(title)
+    title = clean_title(
+        title
+    )
 
     if not title or not link:
 
@@ -412,7 +411,29 @@ def add_article(
         )
     )
 
+    # --------------------------------------------------------
+    # Reject old articles
+    # --------------------------------------------------------
+
     if published_dt < cutoff:
+
+        return
+
+    # --------------------------------------------------------
+    # Reject genuine future timestamps.
+    #
+    # Allow a tiny 5-minute tolerance because publishers can
+    # have slightly incorrect clocks.
+    # --------------------------------------------------------
+
+    future_limit = (
+        now
+        + timedelta(
+            minutes=5
+        )
+    )
+
+    if published_dt > future_limit:
 
         return
 
@@ -431,15 +452,6 @@ def add_article(
 # ============================================================
 
 def news():
-    """
-    Get recent gold/macro headlines.
-
-    NewsAPI is used when NEWSAPI_KEY exists.
-
-    Otherwise multiple Google News RSS searches are used.
-
-    Only articles from the last NEWS_MAX_AGE_HOURS are accepted.
-    """
 
     articles = []
 
@@ -447,12 +459,12 @@ def news():
     # NEWSAPI
     # ========================================================
 
-    key = os.getenv(
+    newsapi_key = os.getenv(
         "NEWSAPI_KEY",
         ""
     )
 
-    if key:
+    if newsapi_key:
 
         try:
 
@@ -470,7 +482,7 @@ def news():
                     "language": "en",
                     "sortBy": "publishedAt",
                     "pageSize": 50,
-                    "apiKey": key
+                    "apiKey": newsapi_key
                 },
                 headers=REQUEST_HEADERS,
                 timeout=15
@@ -484,6 +496,11 @@ def news():
                 "articles",
                 []
             ):
+
+                source_data = article.get(
+                    "source",
+                    {}
+                )
 
                 add_article(
                     articles,
@@ -499,24 +516,18 @@ def news():
                         "url",
                         ""
                     ),
-                    article.get(
-                        "source",
-                        {}
-                    ).get(
+                    source_data.get(
                         "name",
                         ""
                     )
                 )
 
         except Exception:
+
             pass
 
     # ========================================================
-    # GOOGLE NEWS RSS FALLBACK
-    # ========================================================
-
-    # We deliberately use several focused searches rather
-    # than one broad search.
+    # GOOGLE NEWS RSS
     # ========================================================
 
     searches = [
@@ -524,7 +535,8 @@ def news():
         "gold Federal Reserve Fed",
         "gold Treasury yields",
         "gold US dollar DXY",
-        "gold inflation CPI PCE PPI"
+        "gold inflation CPI PCE PPI",
+        "gold economic data"
     ]
 
     for search_term in searches:
@@ -533,7 +545,7 @@ def news():
 
             feed_url = (
                 "https://news.google.com/rss/search?"
-                f"q={requests.utils.quote(search_term)}"
+                f"q={quote(search_term)}"
                 "&hl=en-US"
                 "&gl=US"
                 "&ceid=US:en"
@@ -598,7 +610,9 @@ def news():
 
     for article in articles:
 
-        key = article["title"].lower().strip()
+        key = article[
+            "title"
+        ].lower().strip()
 
         if key not in unique:
 
@@ -609,11 +623,13 @@ def news():
     )
 
     # ========================================================
-    # SORT NEWEST FIRST
+    # NEWEST FIRST
     # ========================================================
 
     articles.sort(
-        key=lambda x: x["published_dt"],
+        key=lambda x: x[
+            "published_dt"
+        ],
         reverse=True
     )
 
@@ -621,7 +637,7 @@ def news():
 
 
 # ============================================================
-# GOLD MARKET SCORING
+# MARKET SCORING
 # ============================================================
 
 def score(
@@ -630,29 +646,31 @@ def score(
     treasury
 ):
     """
-    Transparent first-pass gold-market scoring system.
+    Transparent gold-market scoring.
 
-    This is NOT a predictive trading model.
+    Maximum bullish score:
+        Gold      +3
+        DXY       +3
+        10Y       +2
 
-    Gold:
-        Rising = bullish
-        Falling = bearish
+    Maximum bearish score:
+        Gold      -3
+        DXY       -3
+        10Y       -2
 
-    DXY:
-        Falling = bullish gold
-        Rising = bearish gold
-
-    10Y Treasury:
-        Falling = bullish gold
-        Rising = bearish gold
-
-    Treasury gets less weight than Gold/DXY because the
-    Treasury data is daily rather than intraday.
+    The 10Y has less weight because it is a slower-moving
+    macro indicator compared with gold and DXY.
     """
 
     score_value = 0
 
     reasons = []
+
+    component_scores = {
+        "gold": 0,
+        "dxy": 0,
+        "treasury": 0
+    }
 
     # ========================================================
     # GOLD
@@ -660,11 +678,17 @@ def score(
 
     if gold and "pct" in gold:
 
-        gold_pct = gold["pct"]
+        gold_pct = gold[
+            "pct"
+        ]
 
-        if gold_pct > 0.30:
+        if gold_pct > 0.50:
 
-            score_value += 2
+            component_scores[
+                "gold"
+            ] = 3
+
+            score_value += 3
 
             reasons.append(
                 "Gold is rising strongly."
@@ -672,15 +696,23 @@ def score(
 
         elif gold_pct > 0.05:
 
-            score_value += 1
+            component_scores[
+                "gold"
+            ] = 2
+
+            score_value += 2
 
             reasons.append(
                 "Gold is rising."
             )
 
-        elif gold_pct < -0.30:
+        elif gold_pct < -0.50:
 
-            score_value -= 2
+            component_scores[
+                "gold"
+            ] = -3
+
+            score_value -= 3
 
             reasons.append(
                 "Gold is falling strongly."
@@ -688,7 +720,11 @@ def score(
 
         elif gold_pct < -0.05:
 
-            score_value -= 1
+            component_scores[
+                "gold"
+            ] = -2
+
+            score_value -= 2
 
             reasons.append(
                 "Gold is falling."
@@ -712,41 +748,59 @@ def score(
 
     if dxy and "pct" in dxy:
 
-        dxy_pct = dxy["pct"]
+        dxy_pct = dxy[
+            "pct"
+        ]
 
-        if dxy_pct < -0.15:
+        if dxy_pct < -0.20:
 
-            score_value += 2
+            component_scores[
+                "dxy"
+            ] = 3
+
+            score_value += 3
 
             reasons.append(
                 "DXY is falling strongly, "
-                "which generally supports gold."
+                "which supports gold."
             )
 
         elif dxy_pct < -0.03:
 
-            score_value += 1
+            component_scores[
+                "dxy"
+            ] = 2
+
+            score_value += 2
 
             reasons.append(
-                "DXY is slightly lower, "
-                "which is supportive of gold."
+                "DXY is lower, "
+                "which supports gold."
             )
 
-        elif dxy_pct > 0.15:
+        elif dxy_pct > 0.20:
 
-            score_value -= 2
+            component_scores[
+                "dxy"
+            ] = -3
+
+            score_value -= 3
 
             reasons.append(
                 "DXY is rising strongly, "
-                "which generally pressures gold."
+                "which pressures gold."
             )
 
         elif dxy_pct > 0.03:
 
-            score_value -= 1
+            component_scores[
+                "dxy"
+            ] = -2
+
+            score_value -= 2
 
             reasons.append(
-                "DXY is slightly higher, "
+                "DXY is higher, "
                 "which is a headwind for gold."
             )
 
@@ -763,57 +817,130 @@ def score(
         )
 
     # ========================================================
-    # 10-Y TREASURY
+    # 10Y TREASURY
     # ========================================================
 
-    if not treasury or "value" not in treasury:
+    if treasury and "pct" in treasury:
 
-        reasons.append(
-            "10-year Treasury data unavailable."
-        )
+        treasury_pct = treasury[
+            "pct"
+        ]
+
+        if treasury_pct < -0.10:
+
+            component_scores[
+                "treasury"
+            ] = 2
+
+            score_value += 2
+
+            reasons.append(
+                "The 10Y Treasury yield is falling, "
+                "which is generally supportive of gold."
+            )
+
+        elif treasury_pct < -0.02:
+
+            component_scores[
+                "treasury"
+            ] = 1
+
+            score_value += 1
+
+            reasons.append(
+                "The 10Y Treasury yield is slightly lower, "
+                "which is mildly supportive of gold."
+            )
+
+        elif treasury_pct > 0.10:
+
+            component_scores[
+                "treasury"
+            ] = -2
+
+            score_value -= 2
+
+            reasons.append(
+                "The 10Y Treasury yield is rising, "
+                "which can pressure gold."
+            )
+
+        elif treasury_pct > 0.02:
+
+            component_scores[
+                "treasury"
+            ] = -1
+
+            score_value -= 1
+
+            reasons.append(
+                "The 10Y Treasury yield is slightly higher, "
+                "which is a mild headwind for gold."
+            )
+
+        else:
+
+            reasons.append(
+                "The 10Y Treasury yield is relatively flat."
+            )
 
     else:
 
         reasons.append(
-            "10-year Treasury yield is available "
-            "as macroeconomic context."
+            "10Y Treasury data unavailable."
         )
-
-        # We don't assign an intraday score here because
-        # DGS10 is a daily FRED series.
 
     # ========================================================
     # FINAL BIAS
     # ========================================================
 
-    if score_value >= 3:
+    if score_value >= 6:
 
         bias = "BULLISH"
 
-        confidence = min(
-            10,
-            6 + score_value - 3
-        )
+    elif score_value >= 3:
+
+        bias = "BULLISH"
+
+    elif score_value <= -6:
+
+        bias = "BEARISH"
 
     elif score_value <= -3:
 
         bias = "BEARISH"
 
-        confidence = min(
-            10,
-            6 + abs(score_value) - 3
-        )
-
     else:
 
         bias = "NEUTRAL / WAIT"
 
-        confidence = 5
+    # --------------------------------------------------------
+    # Confidence
+    #
+    # Convert the total possible score of +/-8 into a
+    # confidence value from roughly 1-10.
+    # --------------------------------------------------------
+
+    confidence = round(
+        5 + (
+            abs(score_value) / 8
+        ) * 5
+    )
+
+    confidence = max(
+        1,
+        min(
+            10,
+            confidence
+        )
+    )
 
     return (
         bias,
         confidence,
-        reasons
+        reasons,
+        component_scores,
+        score_value
     )
 
 
@@ -839,7 +966,7 @@ refresh = st.sidebar.selectbox(
         f"{x} seconds"
         if x < 60
         else (
-            f"{x // 60} minute"
+            "1 minute"
             if x == 60
             else f"{x // 60} minutes"
         )
@@ -848,14 +975,13 @@ refresh = st.sidebar.selectbox(
 )
 
 st.sidebar.info(
-    "The dashboard refreshes all available data "
-    "at the selected interval."
+    "The entire dashboard refreshes at the "
+    "selected interval."
 )
 
 st.sidebar.warning(
-    "Gold futures and DXY can move quickly. "
-    "This dashboard is for monitoring and education, "
-    "not execution."
+    "This dashboard is for monitoring and education. "
+    "It does not place trades."
 )
 
 
@@ -885,15 +1011,11 @@ dxy = yf_quote(
     "DX-Y.NYB"
 )
 
-treasury = fred_series(
-    "DGS10"
-)
-
-events = trading_economics_calendar()
+treasury = get_10y_treasury()
 
 articles = news()
 
-bias, confidence, reasons = score(
+bias, confidence, reasons, component_scores, total_score = score(
     gold,
     dxy,
     treasury
@@ -948,24 +1070,15 @@ else:
 
 
 # ============================================================
-# 10 YEAR
+# 10Y
 # ============================================================
 
-if treasury and "value" in treasury:
-
-    treasury_date = treasury.get(
-        "date",
-        ""
-    )
+if treasury and "price" in treasury:
 
     column3.metric(
         "🇺🇸 10Y Treasury",
-        f"{treasury['value']:.2f}%",
-        help=(
-            "10-Year Treasury Constant Maturity Rate "
-            f"from FRED. Latest observation: "
-            f"{treasury_date}"
-        )
+        f"{treasury['price']:.2f}%",
+        f"{treasury['pct']:+.2f}%"
     )
 
 else:
@@ -988,11 +1101,42 @@ column4.metric(
 
 
 # ============================================================
-# MARKET ANALYSIS
+# SCORE BREAKDOWN
 # ============================================================
 
 st.subheader(
-    "What the monitor sees"
+    "📊 Market Signal Breakdown"
+)
+
+score_col1, score_col2, score_col3, score_col4 = st.columns(4)
+
+score_col1.metric(
+    "Gold",
+    f"{component_scores['gold']:+d}"
+)
+
+score_col2.metric(
+    "DXY",
+    f"{component_scores['dxy']:+d}"
+)
+
+score_col3.metric(
+    "10Y",
+    f"{component_scores['treasury']:+d}"
+)
+
+score_col4.metric(
+    "Total",
+    f"{total_score:+d}"
+)
+
+
+# ============================================================
+# ANALYSIS
+# ============================================================
+
+st.subheader(
+    "🔎 What the monitor sees"
 )
 
 for reason in reasons:
@@ -1002,56 +1146,32 @@ for reason in reasons:
     )
 
 
-st.warning(
-    "This is an educational monitoring heuristic. "
-    "It is not financial advice and is not a proven "
-    "trading strategy."
-)
-
-
 # ============================================================
-# 10Y DATA STATUS
+# SIMPLE INTERPRETATION
 # ============================================================
 
-if treasury and "value" in treasury:
+if bias == "BULLISH":
 
-    st.caption(
-        "10Y source: FRED — "
-        f"latest observation {treasury.get('date', 'unknown')}. "
-        "The 10Y FRED series is published daily, so it will "
-        "not necessarily change every dashboard refresh."
+    st.success(
+        f"🟢 The indicators are currently leaning "
+        f"BULLISH for gold. Confidence: "
+        f"{confidence}/10."
     )
 
-else:
+elif bias == "BEARISH":
 
     st.error(
-        "The 10-Year Treasury data could not be retrieved "
-        "from FRED during this refresh."
-    )
-
-
-# ============================================================
-# ECONOMIC CALENDAR
-# ============================================================
-
-st.subheader(
-    "📅 Today's high-importance economic events"
-)
-
-if events.empty:
-
-    st.info(
-        "No Trading Economics calendar data is configured. "
-        "If you add a TE_API_KEY to Streamlit secrets, "
-        "today's high-importance U.S. events can appear here."
+        f"🔴 The indicators are currently leaning "
+        f"BEARISH for gold. Confidence: "
+        f"{confidence}/10."
     )
 
 else:
 
-    st.dataframe(
-        events,
-        use_container_width=True,
-        hide_index=True
+    st.warning(
+        f"🟡 The indicators are mixed. "
+        f"Current reading: NEUTRAL / WAIT. "
+        f"Confidence: {confidence}/10."
     )
 
 
@@ -1068,7 +1188,7 @@ if articles:
     st.caption(
         f"Showing articles published within the last "
         f"{NEWS_MAX_AGE_HOURS} hours. "
-        "Newest articles appear first."
+        "All times are Eastern Time."
     )
 
     for article in articles[:10]:
@@ -1077,16 +1197,16 @@ if articles:
             "published_dt"
         ]
 
-        # Convert UTC to Eastern Time.
-        eastern_time = (
+        eastern = eastern_datetime(
             published_dt
-            .astimezone()
         )
 
-        formatted_time = (
-            eastern_time.strftime(
-                "%b %d, %Y at %I:%M %p"
-            )
+        formatted_time = eastern.strftime(
+            "%b %d, %Y at %I:%M %p ET"
+        )
+
+        age = article_age_text(
+            published_dt
         )
 
         title = article[
@@ -1105,7 +1225,7 @@ if articles:
         if source:
 
             source_text = (
-                f" — {source}"
+                f" • {source}"
             )
 
         else:
@@ -1114,7 +1234,7 @@ if articles:
 
         st.markdown(
             f"**[{title}]({link})**  \n"
-            f"🕒 {formatted_time}"
+            f"🕒 {age} — {formatted_time}"
             f"{source_text}"
         )
 
@@ -1124,7 +1244,38 @@ else:
 
     st.info(
         "No sufficiently recent gold/macro headlines "
-        "were returned during this refresh."
+        "were returned."
+    )
+
+
+# ============================================================
+# DATA SOURCES
+# ============================================================
+
+with st.expander(
+    "Data source information"
+):
+
+    st.write(
+        "🥇 Gold: Yahoo Finance — GC=F"
+    )
+
+    st.write(
+        "💵 DXY: Yahoo Finance — DX-Y.NYB"
+    )
+
+    st.write(
+        "🇺🇸 10Y Treasury: Yahoo Finance — ^TNX"
+    )
+
+    st.write(
+        "📰 News: NewsAPI when configured, "
+        "otherwise Google News RSS."
+    )
+
+    st.write(
+        "News timestamps are converted to "
+        "America/New_York (Eastern Time)."
     )
 
 
@@ -1132,12 +1283,14 @@ else:
 # REFRESH STATUS
 # ============================================================
 
-current_time = datetime.now()
+now_eastern = datetime.now(
+    EASTERN
+)
 
 st.caption(
     "Last dashboard refresh: "
-    + current_time.strftime(
-        "%Y-%m-%d %I:%M:%S %p"
+    + now_eastern.strftime(
+        "%Y-%m-%d %I:%M:%S %p ET"
     )
 )
 
