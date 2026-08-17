@@ -85,22 +85,41 @@ REQUEST_HEADERS = {
 # GITHUB SETTINGS
 # ============================================================
 
-GITHUB_TOKEN = os.getenv(
-    "GITHUB_TOKEN",
-    ""
+def get_secret(name, default=""):
+    """
+    Read a value from Streamlit Secrets first.
+    Fall back to environment variables if necessary.
+    """
+
+    try:
+        value = st.secrets.get(name)
+
+        if value is not None:
+            return str(value).strip()
+
+    except Exception:
+        pass
+
+    return os.getenv(
+        name,
+        default
+    ).strip()
+
+
+GITHUB_TOKEN = get_secret(
+    "GITHUB_TOKEN"
 )
 
-GITHUB_REPO = os.getenv(
-    "GITHUB_REPO",
-    ""
+GITHUB_REPO = get_secret(
+    "GITHUB_REPO"
 )
 
-GITHUB_BRANCH = os.getenv(
+GITHUB_BRANCH = get_secret(
     "GITHUB_BRANCH",
     "main"
 )
 
-GITHUB_HISTORY_FILE = os.getenv(
+GITHUB_HISTORY_FILE = get_secret(
     "GITHUB_HISTORY_FILE",
     "prediction_history.csv"
 )
