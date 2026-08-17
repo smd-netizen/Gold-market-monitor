@@ -3,6 +3,7 @@ import time
 import base64
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
+from io import StringIO
 from urllib.parse import quote
 
 import feedparser
@@ -24,22 +25,24 @@ st.set_page_config(
 
 
 # ============================================================
-# CONTRACT SETTINGS
+# TIMEZONE
 # ============================================================
-# CURRENT CONTRACT:
-#
-# 1-Ounce Gold — October 2026
-#
-# When we eventually roll contracts, these are the ONLY
-# values we should normally need to change.
-#
-# IMPORTANT:
-# Historical predictions are tagged with the contract and
-# will remain in the GitHub database.
+
+EASTERN = ZoneInfo(
+    "America/New_York"
+)
+
+
+# ============================================================
+# CURRENT GOLD CONTRACT
 # ============================================================
 
 GOLD_TICKER = "1OZV26.CMX"
-GOLD_CONTRACT_NAME = "1-Ounce Gold — October 2026"
+
+GOLD_CONTRACT_NAME = (
+    "1-Ounce Gold — October 2026"
+)
+
 GOLD_CME_SYMBOL = "1OZV6"
 
 
@@ -48,14 +51,19 @@ GOLD_CME_SYMBOL = "1OZV6"
 # ============================================================
 
 DXY_TICKER = "DX-Y.NYB"
+
 TREASURY_TICKER = "^TNX"
 
 
 # ============================================================
-# SETTINGS
+# APP SETTINGS
 # ============================================================
 
 NEWS_MAX_AGE_HOURS = 48
+
+PREDICTION_THRESHOLD = 5.00
+
+PREDICTION_INTERVAL_MINUTES = 15
 
 PREDICTION_HORIZONS = {
     "15m": 15,
@@ -64,13 +72,10 @@ PREDICTION_HORIZONS = {
     "2h": 120
 }
 
-PREDICTION_THRESHOLD = 5.00
 
-PREDICTION_INTERVAL_MINUTES = 15
-
-EASTERN = ZoneInfo(
-    "America/New_York"
-)
+# ============================================================
+# REQUEST HEADERS
+# ============================================================
 
 REQUEST_HEADERS = {
     "User-Agent": (
@@ -87,17 +92,25 @@ REQUEST_HEADERS = {
 
 def get_secret(name, default=""):
     """
-    Read a value from Streamlit Secrets first.
-    Fall back to environment variables if necessary.
+    Read from Streamlit Secrets first.
+
+    Environment variables are used only as a fallback.
     """
 
     try:
-        value = st.secrets.get(name)
 
-        if value is not None:
-            return str(value).strip()
+        if name in st.secrets:
+
+            value = st.secrets[name]
+
+            if value is not None:
+
+                return str(
+                    value
+                ).strip()
 
     except Exception:
+
         pass
 
     return os.getenv(
@@ -126,7 +139,7 @@ GITHUB_HISTORY_FILE = get_secret(
 
 
 # ============================================================
-# HISTORY COLUMNS
+# HISTORY DATABASE COLUMNS
 # ============================================================
 
 HISTORY_COLUMNS = [
@@ -170,7 +183,7 @@ HISTORY_COLUMNS = [
 
 
 # ============================================================
-# GITHUB API
+# GITHUB API HELPERS
 # ============================================================
 
 def github_headers():
@@ -197,22 +210,94 @@ def github_file_url():
 
 
 # ============================================================
+# GITHUB CONNECTION TEST
+# ============================================================
+
+def test_github_connection():
+
+    if not GITHUB_TOKEN:
+
+        return (
+            False,
+            "GITHUB_TOKEN is missing from Streamlit Secrets."
+        )
+
+    if not GITHUB_REPO:
+
+        return (
+            False,
+            "GITHUB_REPO is missing from Streamlit Secrets."
+        )
+
+    try:
+
+        response = requests.get(
+            (
+                "https://api.github.com/repos/"
+                f"{GITHUB_REPO}"
+            ),
+            headers=github_headers(),
+            timeout=15
+        )
+
+        if response.status_code == 200:
+
+            return (
+                True,
+                "GitHub authentication successful."
+            )
+
+        if response.status_code == 401:
+
+            return (
+                False,
+                "GitHub rejected the token (401 Unauthorized). "
+                "The token being supplied to the app is not "
+                "being accepted by GitHub."
+            )
+
+        if response.status_code == 403:
+
+            return (
+                False,
+                "GitHub returned 403 Forbidden. "
+                "The token is recognized, but GitHub is "
+                "blocking this request."
+            )
+
+        if response.status_code == 404:
+
+            return (
+                False,
+                "GitHub returned 404. "
+                "Check the repository name."
+            )
+
+        return (
+            False,
+            f"GitHub returned HTTP {response.status_code}."
+        )
+
+    except Exception as e:
+
+        return (
+            False,
+            f"Could not contact GitHub: {e}"
+        )
+
+
+github_connected, github_message = (
+    test_github_connection()
+)
+
+
+# ============================================================
 # LOAD HISTORY FROM GITHUB
 # ============================================================
 
 def load_history():
 
-    # --------------------------------------------------------
-    # If GitHub hasn't been configured correctly, fall back
-    # to an empty database rather than crashing the dashboard.
-    # --------------------------------------------------------
-
-    if not GITHUB_TOKEN or not GITHUB_REPO:
-
-        st.warning(
-            "GitHub prediction storage is not configured. "
-            "Check Streamlit Secrets."
-        )
+    if not github_connected:
 
         return pd.DataFrame(
             columns=HISTORY_COLUMNS
@@ -224,16 +309,11 @@ def load_history():
             github_file_url(),
             headers=github_headers(),
             params={
-                "ref": GITHUB_BRANCH
+                "ref":
+                    GITHUB_BRANCH
             },
             timeout=15
         )
-
-        # ----------------------------------------------------
-        # File does not exist yet.
-        # That's OK. We'll create it when the first prediction
-        # is generated.
-        # ----------------------------------------------------
 
         if response.status_code == 404:
 
@@ -262,10 +342,10 @@ def load_history():
             "utf-8"
         )
 
-        from io import StringIO
-
         df = pd.read_csv(
-            StringIO(decoded)
+            StringIO(
+                decoded
+            )
         )
 
         for column in HISTORY_COLUMNS:
@@ -296,14 +376,10 @@ def load_history():
 
 def save_history(
     df,
-    commit_message="Update prediction history"
+    commit_message
 ):
 
-    if not GITHUB_TOKEN or not GITHUB_REPO:
-
-        st.error(
-            "GitHub storage is not configured."
-        )
+    if not github_connected:
 
         return False
 
@@ -313,24 +389,23 @@ def save_history(
             index=False
         )
 
-        encoded_content = base64.b64encode(
-            csv_content.encode(
+        encoded_content = (
+            base64.b64encode(
+                csv_content.encode(
+                    "utf-8"
+                )
+            )
+            .decode(
                 "utf-8"
             )
-        ).decode(
-            "utf-8"
         )
-
-        # ----------------------------------------------------
-        # First find out whether the file already exists.
-        # GitHub requires its SHA when updating an existing file.
-        # ----------------------------------------------------
 
         get_response = requests.get(
             github_file_url(),
             headers=github_headers(),
             params={
-                "ref": GITHUB_BRANCH
+                "ref":
+                    GITHUB_BRANCH
             },
             timeout=15
         )
@@ -341,9 +416,7 @@ def save_history(
 
             existing_sha = (
                 get_response.json()
-                .get(
-                    "sha"
-                )
+                .get("sha")
             )
 
         elif get_response.status_code != 404:
@@ -363,9 +436,7 @@ def save_history(
 
         if existing_sha:
 
-            payload[
-                "sha"
-            ] = existing_sha
+            payload["sha"] = existing_sha
 
         response = requests.put(
             github_file_url(),
@@ -389,66 +460,7 @@ def save_history(
 
 
 # ============================================================
-# PREDICTION HISTORY HELPERS
-# ============================================================
-
-def generate_prediction_id():
-
-    return (
-        datetime.now(
-            timezone.utc
-        ).strftime(
-            "%Y%m%d%H%M%S%f"
-        )
-    )
-
-
-def get_latest_prediction(
-    history,
-    contract
-):
-
-    if history.empty:
-
-        return None
-
-    current = history[
-        history["contract"] == contract
-    ].copy()
-
-    if current.empty:
-
-        return None
-
-    current[
-        "timestamp_utc"
-    ] = pd.to_datetime(
-        current[
-            "timestamp_utc"
-        ],
-        utc=True,
-        errors="coerce"
-    )
-
-    current = current.dropna(
-        subset=[
-            "timestamp_utc"
-        ]
-    )
-
-    if current.empty:
-
-        return None
-
-    current = current.sort_values(
-        "timestamp_utc"
-    )
-
-    return current.iloc[-1]
-
-
-# ============================================================
-# YAHOO QUOTE
+# YAHOO FINANCE QUOTE
 # ============================================================
 
 def yf_quote(
@@ -484,13 +496,7 @@ def yf_quote(
                 dtype=float
             )
 
-        if not closes.empty:
-
-            raw_price = float(
-                closes.iloc[-1]
-            )
-
-        else:
+        if closes.empty:
 
             daily = stock.history(
                 period="10d",
@@ -505,24 +511,24 @@ def yf_quote(
 
                 return {
                     "error":
-                        "No Yahoo Finance data returned."
+                        "No Yahoo Finance data."
                 }
 
-            daily_closes = pd.to_numeric(
+            closes = pd.to_numeric(
                 daily["Close"],
                 errors="coerce"
             ).dropna()
 
-            if daily_closes.empty:
+        if closes.empty:
 
-                return {
-                    "error":
-                        "No valid price data returned."
-                }
+            return {
+                "error":
+                    "No valid price data."
+            }
 
-            raw_price = float(
-                daily_closes.iloc[-1]
-            )
+        raw_price = float(
+            closes.iloc[-1]
+        )
 
         daily = stock.history(
             period="10d",
@@ -531,28 +537,30 @@ def yf_quote(
         )
 
         if (
-            daily.empty
-            or "Close" not in daily.columns
+            not daily.empty
+            and "Close" in daily.columns
         ):
-
-            previous_raw = raw_price
-
-        else:
 
             daily_closes = pd.to_numeric(
                 daily["Close"],
                 errors="coerce"
             ).dropna()
 
-            if len(daily_closes) >= 2:
+        else:
 
-                previous_raw = float(
-                    daily_closes.iloc[-2]
-                )
+            daily_closes = pd.Series(
+                dtype=float
+            )
 
-            else:
+        if len(daily_closes) >= 2:
 
-                previous_raw = raw_price
+            previous_raw = float(
+                daily_closes.iloc[-2]
+            )
+
+        else:
+
+            previous_raw = raw_price
 
         price = (
             raw_price
@@ -583,17 +591,24 @@ def yf_quote(
             pct = 0.0
 
         return {
-            "price": price,
+            "price":
+                price,
+
             "previous_close":
                 previous_close,
-            "change": change,
-            "pct": pct
+
+            "change":
+                change,
+
+            "pct":
+                pct
         }
 
     except Exception as e:
 
         return {
-            "error": str(e)
+            "error":
+                str(e)
         }
 
 
@@ -603,29 +618,12 @@ def yf_quote(
 
 def get_10y_treasury():
 
-    result = yf_quote(
+    # ^TNX is quoted as 10x the actual yield.
+    # Example: 44.50 -> 4.45%
+    return yf_quote(
         TREASURY_TICKER,
         multiplier=0.1
     )
-
-    if (
-        not result
-        or "price" not in result
-    ):
-
-        return {
-            "error": (
-                result.get(
-                    "error",
-                    "10Y data unavailable."
-                )
-                if result
-                else
-                "10Y data unavailable."
-            )
-        }
-
-    return result
 
 
 # ============================================================
@@ -640,46 +638,40 @@ def get_gold_technical_data():
             GOLD_TICKER
         )
 
-        intraday = ticker.history(
+        data = ticker.history(
             period="5d",
             interval="15m",
             auto_adjust=False
         )
 
-        if (
-            intraday.empty
-            or "High" not in intraday.columns
-            or "Low" not in intraday.columns
-            or "Close" not in intraday.columns
-        ):
+        if data.empty:
 
             return {
                 "error":
-                    "Gold technical data unavailable."
+                    "No Gold technical data."
             }
 
-        intraday = intraday.copy()
-
         for column in [
-            "Close",
+            "Open",
             "High",
-            "Low"
+            "Low",
+            "Close"
         ]:
 
-            intraday[column] = pd.to_numeric(
-                intraday[column],
+            data[column] = pd.to_numeric(
+                data[column],
                 errors="coerce"
             )
 
-        intraday = intraday.dropna(
+        data = data.dropna(
             subset=[
-                "Close",
                 "High",
-                "Low"
+                "Low",
+                "Close"
             ]
         )
 
-        if intraday.empty:
+        if data.empty:
 
             return {
                 "error":
@@ -687,13 +679,13 @@ def get_gold_technical_data():
             }
 
         current_price = float(
-            intraday[
+            data[
                 "Close"
             ].iloc[-1]
         )
 
         ma20 = float(
-            intraday[
+            data[
                 "Close"
             ]
             .rolling(20)
@@ -702,7 +694,7 @@ def get_gold_technical_data():
         )
 
         ma50 = float(
-            intraday[
+            data[
                 "Close"
             ]
             .rolling(50)
@@ -710,10 +702,10 @@ def get_gold_technical_data():
             .iloc[-1]
         )
 
-        if intraday.index.tz is not None:
+        if data.index.tz is not None:
 
             eastern_index = (
-                intraday.index
+                data.index
                 .tz_convert(
                     EASTERN
                 )
@@ -722,7 +714,7 @@ def get_gold_technical_data():
         else:
 
             eastern_index = (
-                intraday.index
+                data.index
                 .tz_localize(
                     "UTC"
                 )
@@ -737,16 +729,16 @@ def get_gold_technical_data():
             EASTERN
         ).date()
 
-        today_data = intraday[
+        today_data = data[
             dates == today
         ]
 
         if today_data.empty:
 
-            today_data = intraday.tail(
+            today_data = data.tail(
                 min(
                     26,
-                    len(intraday)
+                    len(data)
                 )
             )
 
@@ -762,57 +754,49 @@ def get_gold_technical_data():
             ].min()
         )
 
-        unique_dates = sorted(
-            set(dates)
+        previous_dates = sorted(
+            set(
+                date
+                for date in dates
+                if date < today
+            )
         )
 
-        previous_day = None
+        if previous_dates:
 
-        for date_value in reversed(
-            unique_dates
-        ):
+            previous_date = (
+                previous_dates[-1]
+            )
 
-            if date_value < today:
-
-                previous_day = date_value
-
-                break
-
-        if previous_day is not None:
-
-            previous_day_data = intraday[
-                dates == previous_day
+            previous_data = data[
+                dates == previous_date
             ]
 
         else:
 
-            previous_day_data = pd.DataFrame()
-
-        if previous_day_data.empty:
-
-            previous_day_data = intraday.tail(
+            previous_data = data.tail(
                 min(
                     26,
-                    len(intraday)
+                    len(data)
                 )
             )
 
         previous_day_high = float(
-            previous_day_data[
+            previous_data[
                 "High"
             ].max()
         )
 
         previous_day_low = float(
-            previous_day_data[
+            previous_data[
                 "Low"
             ].min()
         )
 
-        recent = intraday.tail(
+        recent = data.tail(
             min(
                 100,
-                len(intraday)
+                len(data)
             )
         )
 
@@ -825,6 +809,7 @@ def get_gold_technical_data():
         ].tolist()
 
         swing_highs = []
+
         swing_lows = []
 
         for i in range(
@@ -833,10 +818,14 @@ def get_gold_technical_data():
         ):
 
             if (
-                highs[i] >= highs[i - 1]
-                and highs[i] >= highs[i - 2]
-                and highs[i] >= highs[i + 1]
-                and highs[i] >= highs[i + 2]
+                highs[i]
+                >= highs[i - 1]
+                and highs[i]
+                >= highs[i - 2]
+                and highs[i]
+                >= highs[i + 1]
+                and highs[i]
+                >= highs[i + 2]
             ):
 
                 swing_highs.append(
@@ -849,10 +838,14 @@ def get_gold_technical_data():
         ):
 
             if (
-                lows[i] <= lows[i - 1]
-                and lows[i] <= lows[i - 2]
-                and lows[i] <= lows[i + 1]
-                and lows[i] <= lows[i + 2]
+                lows[i]
+                <= lows[i - 1]
+                and lows[i]
+                <= lows[i - 2]
+                and lows[i]
+                <= lows[i + 1]
+                and lows[i]
+                <= lows[i + 2]
             ):
 
                 swing_lows.append(
@@ -860,42 +853,38 @@ def get_gold_technical_data():
                 )
 
         resistance_candidates = [
-            value
-            for value in (
+            x
+            for x in (
                 swing_highs
                 + [previous_day_high]
             )
-            if value > current_price
+            if x > current_price
         ]
 
         support_candidates = [
-            value
-            for value in (
+            x
+            for x in (
                 swing_lows
                 + [previous_day_low]
             )
-            if value < current_price
+            if x < current_price
         ]
 
-        if resistance_candidates:
-
-            resistance = min(
+        resistance = (
+            min(
                 resistance_candidates
             )
+            if resistance_candidates
+            else today_high
+        )
 
-        else:
-
-            resistance = today_high
-
-        if support_candidates:
-
-            support = max(
+        support = (
+            max(
                 support_candidates
             )
-
-        else:
-
-            support = today_low
+            if support_candidates
+            else today_low
+        )
 
         return {
             "price":
@@ -929,7 +918,8 @@ def get_gold_technical_data():
     except Exception as e:
 
         return {
-            "error": str(e)
+            "error":
+                str(e)
         }
 
 
@@ -952,25 +942,15 @@ def technical_score(
             []
         )
 
-    price = technical[
-        "price"
-    ]
+    price = technical["price"]
 
-    ma20 = technical[
-        "ma20"
-    ]
+    ma20 = technical["ma20"]
 
-    ma50 = technical[
-        "ma50"
-    ]
+    ma50 = technical["ma50"]
 
-    support = technical[
-        "support"
-    ]
+    support = technical["support"]
 
-    resistance = technical[
-        "resistance"
-    ]
+    resistance = technical["resistance"]
 
     score = 0
 
@@ -1033,8 +1013,7 @@ def technical_score(
     else:
 
         reasons.append(
-            "The moving averages are "
-            "essentially flat."
+            "The moving averages are flat."
         )
 
     if score >= 2:
@@ -1049,54 +1028,58 @@ def technical_score(
 
         bias = "MIXED"
 
-    resistance_distance = 0
+    resistance_distance = (
+        (
+            resistance - price
+        )
+        / price
+        * 100
+        if resistance > price
+        else 0
+    )
 
-    support_distance = 0
+    support_distance = (
+        (
+            price - support
+        )
+        / price
+        * 100
+        if support < price
+        else 0
+    )
 
-    if resistance > price:
-
-        resistance_distance = (
-            (
-                resistance - price
-            )
-            / price
-        ) * 100
-
-    if support < price:
-
-        support_distance = (
-            (
-                price - support
-            )
-            / price
-        ) * 100
-
-    if 0 < resistance_distance <= 0.30:
+    if (
+        0 < resistance_distance <= 0.30
+    ):
 
         reasons.append(
             "⚠️ Gold is very close "
-            "to nearby resistance."
+            "to resistance."
         )
 
-    elif 0 < resistance_distance <= 0.60:
+    elif (
+        0 < resistance_distance <= 0.60
+    ):
 
         reasons.append(
-            "Gold is approaching "
-            "nearby resistance."
+            "Gold is approaching resistance."
         )
 
-    if 0 < support_distance <= 0.30:
+    if (
+        0 < support_distance <= 0.30
+    ):
 
         reasons.append(
             "⚠️ Gold is very close "
-            "to nearby support."
+            "to support."
         )
 
-    elif 0 < support_distance <= 0.60:
+    elif (
+        0 < support_distance <= 0.60
+    ):
 
         reasons.append(
-            "Gold is approaching "
-            "nearby support."
+            "Gold is approaching support."
         )
 
     return (
@@ -1116,65 +1099,41 @@ def macro_score(
     treasury
 ):
 
-    score_value = 0
+    score = 0
 
     reasons = []
 
-    component_scores = {
-        "gold": 0,
-        "dxy": 0,
-        "treasury": 0
-    }
-
     if gold and "pct" in gold:
 
-        gold_pct = gold[
-            "pct"
-        ]
+        pct = gold["pct"]
 
-        if gold_pct > 0.50:
+        if pct > 0.50:
 
-            component_scores[
-                "gold"
-            ] = 3
-
-            score_value += 3
+            score += 3
 
             reasons.append(
                 "Gold is rising strongly."
             )
 
-        elif gold_pct > 0.05:
+        elif pct > 0.05:
 
-            component_scores[
-                "gold"
-            ] = 2
-
-            score_value += 2
+            score += 2
 
             reasons.append(
                 "Gold is rising."
             )
 
-        elif gold_pct < -0.50:
+        elif pct < -0.50:
 
-            component_scores[
-                "gold"
-            ] = -3
-
-            score_value -= 3
+            score -= 3
 
             reasons.append(
                 "Gold is falling strongly."
             )
 
-        elif gold_pct < -0.05:
+        elif pct < -0.05:
 
-            component_scores[
-                "gold"
-            ] = -2
-
-            score_value -= 2
+            score -= 2
 
             reasons.append(
                 "Gold is falling."
@@ -1194,59 +1153,41 @@ def macro_score(
 
     if dxy and "pct" in dxy:
 
-        dxy_pct = dxy[
-            "pct"
-        ]
+        pct = dxy["pct"]
 
-        if dxy_pct < -0.20:
+        if pct < -0.20:
 
-            component_scores[
-                "dxy"
-            ] = 3
-
-            score_value += 3
+            score += 3
 
             reasons.append(
                 "DXY is falling strongly, "
-                "which supports gold."
+                "supporting gold."
             )
 
-        elif dxy_pct < -0.03:
+        elif pct < -0.03:
 
-            component_scores[
-                "dxy"
-            ] = 2
-
-            score_value += 2
+            score += 2
 
             reasons.append(
-                "DXY is lower, "
-                "which supports gold."
+                "DXY is falling, "
+                "supporting gold."
             )
 
-        elif dxy_pct > 0.20:
+        elif pct > 0.20:
 
-            component_scores[
-                "dxy"
-            ] = -3
-
-            score_value -= 3
+            score -= 3
 
             reasons.append(
                 "DXY is rising strongly, "
-                "which pressures gold."
+                "pressuring gold."
             )
 
-        elif dxy_pct > 0.03:
+        elif pct > 0.03:
 
-            component_scores[
-                "dxy"
-            ] = -2
-
-            score_value -= 2
+            score -= 2
 
             reasons.append(
-                "DXY is higher, "
+                "DXY is rising, "
                 "which is a headwind for gold."
             )
 
@@ -1264,68 +1205,46 @@ def macro_score(
 
     if treasury and "pct" in treasury:
 
-        treasury_pct = treasury[
-            "pct"
-        ]
+        pct = treasury["pct"]
 
-        if treasury_pct < -0.10:
+        if pct < -0.10:
 
-            component_scores[
-                "treasury"
-            ] = 2
-
-            score_value += 2
+            score += 2
 
             reasons.append(
-                "The 10Y Treasury yield is "
-                "falling, which is generally "
-                "supportive of gold."
+                "The 10Y yield is falling, "
+                "supporting gold."
             )
 
-        elif treasury_pct < -0.02:
+        elif pct < -0.02:
 
-            component_scores[
-                "treasury"
-            ] = 1
-
-            score_value += 1
+            score += 1
 
             reasons.append(
-                "The 10Y Treasury yield "
-                "is slightly lower."
+                "The 10Y yield is slightly lower."
             )
 
-        elif treasury_pct > 0.10:
+        elif pct > 0.10:
 
-            component_scores[
-                "treasury"
-            ] = -2
-
-            score_value -= 2
+            score -= 2
 
             reasons.append(
-                "The 10Y Treasury yield is "
-                "rising, which can pressure gold."
+                "The 10Y yield is rising, "
+                "pressuring gold."
             )
 
-        elif treasury_pct > 0.02:
+        elif pct > 0.02:
 
-            component_scores[
-                "treasury"
-            ] = -1
-
-            score_value -= 1
+            score -= 1
 
             reasons.append(
-                "The 10Y Treasury yield "
-                "is slightly higher."
+                "The 10Y yield is slightly higher."
             )
 
         else:
 
             reasons.append(
-                "The 10Y Treasury yield "
-                "is relatively flat."
+                "The 10Y yield is relatively flat."
             )
 
     else:
@@ -1334,11 +1253,11 @@ def macro_score(
             "10Y Treasury data unavailable."
         )
 
-    if score_value >= 3:
+    if score >= 3:
 
         bias = "BULLISH"
 
-    elif score_value <= -3:
+    elif score <= -3:
 
         bias = "BEARISH"
 
@@ -1348,7 +1267,7 @@ def macro_score(
 
     confidence = round(
         5 + (
-            abs(score_value)
+            abs(score)
             / 8
         ) * 5
     )
@@ -1365,13 +1284,12 @@ def macro_score(
         bias,
         confidence,
         reasons,
-        component_scores,
-        score_value
+        score
     )
 
 
 # ============================================================
-# COMBINED BIAS
+# COMBINE MACRO + TECHNICAL
 # ============================================================
 
 def combined_bias(
@@ -1428,8 +1346,7 @@ def combined_bias(
 
     elif (
         macro_bias != "NEUTRAL / WAIT"
-        and technical_bias != "MIXED"
-        and macro_bias != technical_bias
+        and technical_bias == "MIXED"
     ):
 
         confidence -= 1
@@ -1449,6 +1366,19 @@ def combined_bias(
 
 
 # ============================================================
+# PREDICTION ID
+# ============================================================
+
+def prediction_id():
+
+    return datetime.now(
+        timezone.utc
+    ).strftime(
+        "%Y%m%d%H%M%S%f"
+    )
+
+
+# ============================================================
 # CREATE PREDICTION
 # ============================================================
 
@@ -1461,7 +1391,7 @@ def create_prediction(
     macro_bias,
     macro_confidence,
     technical_bias,
-    technical_total,
+    technical_score_value,
     overall_bias,
     overall_confidence
 ):
@@ -1507,7 +1437,7 @@ def create_prediction(
 
     row = {
         "prediction_id":
-            generate_prediction_id(),
+            prediction_id(),
 
         "timestamp_utc":
             now_utc.isoformat(),
@@ -1527,44 +1457,36 @@ def create_prediction(
             price,
 
         "dxy_price":
-            (
-                dxy.get(
-                    "price",
-                    ""
-                )
-                if dxy
-                else ""
-            ),
+            dxy.get(
+                "price",
+                ""
+            )
+            if dxy
+            else "",
 
         "dxy_pct":
-            (
-                dxy.get(
-                    "pct",
-                    ""
-                )
-                if dxy
-                else ""
-            ),
+            dxy.get(
+                "pct",
+                ""
+            )
+            if dxy
+            else "",
 
         "treasury_yield":
-            (
-                treasury.get(
-                    "price",
-                    ""
-                )
-                if treasury
-                else ""
-            ),
+            treasury.get(
+                "price",
+                ""
+            )
+            if treasury
+            else "",
 
         "treasury_pct":
-            (
-                treasury.get(
-                    "pct",
-                    ""
-                )
-                if treasury
-                else ""
-            ),
+            treasury.get(
+                "pct",
+                ""
+            )
+            if treasury
+            else "",
 
         "macro_bias":
             macro_bias,
@@ -1576,7 +1498,7 @@ def create_prediction(
             technical_bias,
 
         "technical_score":
-            technical_total,
+            technical_score_value,
 
         "overall_bias":
             overall_bias,
@@ -1672,6 +1594,54 @@ def create_prediction(
 
 
 # ============================================================
+# GET LATEST PREDICTION
+# ============================================================
+
+def get_latest_prediction(
+    history
+):
+
+    if history.empty:
+
+        return None
+
+    current = history[
+        history["contract"]
+        == GOLD_TICKER
+    ].copy()
+
+    if current.empty:
+
+        return None
+
+    current[
+        "timestamp_utc"
+    ] = pd.to_datetime(
+        current[
+            "timestamp_utc"
+        ],
+        utc=True,
+        errors="coerce"
+    )
+
+    current = current.dropna(
+        subset=[
+            "timestamp_utc"
+        ]
+    )
+
+    if current.empty:
+
+        return None
+
+    current = current.sort_values(
+        "timestamp_utc"
+    )
+
+    return current.iloc[-1]
+
+
+# ============================================================
 # CHECK PAST PREDICTIONS
 # ============================================================
 
@@ -1681,7 +1651,10 @@ def check_predictions(
 
     if history.empty:
 
-        return history, False
+        return (
+            history,
+            False
+        )
 
     changed = False
 
@@ -1751,15 +1724,15 @@ def check_predictions(
                 f"checked_{horizon_name}"
             )
 
-            existing_result = history.at[
+            existing = history.at[
                 index,
                 result_column
             ]
 
             if (
-                pd.notna(existing_result)
+                pd.notna(existing)
                 and str(
-                    existing_result
+                    existing
                 ).strip() != ""
             ):
 
@@ -1786,16 +1759,13 @@ def check_predictions(
 
                 if (
                     data.empty
-                    or "Close" not in data.columns
+                    or "Close"
+                    not in data.columns
                 ):
 
                     continue
 
-                data = data.copy()
-
-                data[
-                    "Close"
-                ] = pd.to_numeric(
+                data["Close"] = pd.to_numeric(
                     data["Close"],
                     errors="coerce"
                 )
@@ -1809,13 +1779,6 @@ def check_predictions(
                 if data.empty:
 
                     continue
-
-                target_time = (
-                    timestamp
-                    + pd.Timedelta(
-                        minutes=minutes
-                    )
-                )
 
                 if data.index.tz is None:
 
@@ -1835,23 +1798,24 @@ def check_predictions(
                         )
                     )
 
+                target_time = (
+                    timestamp
+                    + pd.Timedelta(
+                        minutes=minutes
+                    )
+                )
+
                 differences = abs(
                     data.index
                     - target_time
                 )
 
-                closest_position = (
-                    differences.argmin()
-                )
+                position = differences.argmin()
 
-                closest_difference = (
-                    differences[
-                        closest_position
-                    ].total_seconds()
-                )
-
-                if closest_difference > (
-                    20 * 60
+                if (
+                    differences[position]
+                    .total_seconds()
+                    > 20 * 60
                 ):
 
                     continue
@@ -1859,9 +1823,7 @@ def check_predictions(
                 future_price = float(
                     data[
                         "Close"
-                    ].iloc[
-                        closest_position
-                    ]
+                    ].iloc[position]
                 )
 
                 move = (
@@ -1901,7 +1863,9 @@ def check_predictions(
 
                 else:
 
-                    if abs(move) < PREDICTION_THRESHOLD:
+                    if abs(
+                        move
+                    ) < PREDICTION_THRESHOLD:
 
                         result = "CORRECT"
 
@@ -1932,7 +1896,10 @@ def check_predictions(
 
                 continue
 
-    return history, changed
+    return (
+        history,
+        changed
+    )
 
 
 # ============================================================
@@ -1946,22 +1913,18 @@ def performance_stats(
 
     if history.empty:
 
-        return {
-            "15m": None,
-            "30m": None,
-            "1h": None,
-            "2h": None
-        }
+        return {}
 
     df = history.copy()
 
-    if contract is not None:
+    if contract:
 
         df = df[
-            df["contract"] == contract
+            df["contract"]
+            == contract
         ]
 
-    stats = {}
+    results = {}
 
     for horizon in PREDICTION_HORIZONS:
 
@@ -1969,18 +1932,18 @@ def performance_stats(
             f"result_{horizon}"
         )
 
-        results = (
+        values = (
             df[column]
             .astype(str)
             .str.upper()
         )
 
         correct = (
-            results == "CORRECT"
+            values == "CORRECT"
         ).sum()
 
         wrong = (
-            results == "WRONG"
+            values == "WRONG"
         ).sum()
 
         total = (
@@ -1988,131 +1951,31 @@ def performance_stats(
             + wrong
         )
 
-        if total == 0:
+        results[horizon] = {
+            "correct":
+                int(correct),
 
-            stats[horizon] = {
-                "correct": 0,
-                "wrong": 0,
-                "total": 0,
-                "accuracy": None
-            }
+            "wrong":
+                int(wrong),
 
-        else:
+            "total":
+                int(total),
 
-            stats[horizon] = {
-                "correct":
-                    int(correct),
+            "accuracy":
+                (
+                    correct
+                    / total
+                    * 100
+                    if total
+                    else None
+                )
+        }
 
-                "wrong":
-                    int(wrong),
-
-                "total":
-                    int(total),
-
-                "accuracy":
-                    (
-                        correct
-                        / total
-                    ) * 100
-            }
-
-    return stats
-
-
-def confidence_stats(
-    history,
-    contract=None
-):
-
-    if history.empty:
-
-        return pd.DataFrame()
-
-    df = history.copy()
-
-    if contract is not None:
-
-        df = df[
-            df["contract"] == contract
-        ]
-
-    rows = []
-
-    for confidence in range(
-        1,
-        11
-    ):
-
-        subset = df[
-            pd.to_numeric(
-                df[
-                    "confidence"
-                ],
-                errors="coerce"
-            ) == confidence
-        ]
-
-        if subset.empty:
-
-            continue
-
-        results = (
-            subset[
-                "result_1h"
-            ]
-            .astype(str)
-            .str.upper()
-        )
-
-        correct = (
-            results == "CORRECT"
-        ).sum()
-
-        wrong = (
-            results == "WRONG"
-        ).sum()
-
-        total = (
-            correct
-            + wrong
-        )
-
-        if total == 0:
-
-            continue
-
-        rows.append(
-            {
-                "Confidence":
-                    confidence,
-
-                "1H Correct":
-                    int(correct),
-
-                "1H Wrong":
-                    int(wrong),
-
-                "1H Predictions":
-                    int(total),
-
-                "1H Accuracy":
-                    round(
-                        (
-                            correct
-                            / total
-                        ) * 100,
-                        1
-                    )
-            }
-        )
-
-    return pd.DataFrame(
-        rows
-    )
+    return results
 
 
 # ============================================================
-# NEWS DATE PARSING
+# NEWS
 # ============================================================
 
 def parse_news_date(
@@ -2142,116 +2005,9 @@ def parse_news_date(
         return None
 
 
-def article_age_text(
-    dt
-):
+def news():
 
-    now = datetime.now(
-        timezone.utc
-    )
-
-    seconds = int(
-        (
-            now - dt
-        ).total_seconds()
-    )
-
-    if seconds < 0:
-
-        seconds = 0
-
-    minutes = seconds // 60
-
-    if minutes < 1:
-
-        return "just now"
-
-    if minutes < 60:
-
-        return f"{minutes}m ago"
-
-    hours = minutes // 60
-
-    remaining = (
-        minutes % 60
-    )
-
-    if hours < 24:
-
-        if remaining == 0:
-
-            return f"{hours}h ago"
-
-        return (
-            f"{hours}h "
-            f"{remaining}m ago"
-        )
-
-    days = hours // 24
-
-    return f"{days}d ago"
-
-
-def clean_title(
-    title
-):
-
-    if not title:
-
-        return ""
-
-    title = str(
-        title
-    ).strip()
-
-    if " - " in title:
-
-        parts = title.rsplit(
-            " - ",
-            1
-        )
-
-        if (
-            len(parts) == 2
-            and len(
-                parts[1].strip()
-            ) < 60
-        ):
-
-            title = (
-                parts[0]
-                .strip()
-            )
-
-    return title
-
-
-def add_article(
-    articles,
-    published,
-    title,
-    link,
-    source=""
-):
-
-    title = clean_title(
-        title
-    )
-
-    if (
-        not title
-        or not link
-    ):
-
-        return
-
-    published_dt = parse_news_date(
-        published
-    )
-
-    if published_dt is None:
-
-        return
+    articles = []
 
     now = datetime.now(
         timezone.utc
@@ -2264,49 +2020,12 @@ def add_article(
         )
     )
 
-    if published_dt < cutoff:
+    # --------------------------------------------------------
+    # NewsAPI
+    # --------------------------------------------------------
 
-        return
-
-    future_limit = (
-        now
-        + timedelta(
-            minutes=5
-        )
-    )
-
-    if published_dt > future_limit:
-
-        return
-
-    articles.append(
-        {
-            "published_dt":
-                published_dt,
-
-            "title":
-                title,
-
-            "link":
-                link,
-
-            "source":
-                source
-        }
-    )
-
-
-# ============================================================
-# NEWS
-# ============================================================
-
-def news():
-
-    articles = []
-
-    newsapi_key = os.getenv(
-        "NEWSAPI_KEY",
-        ""
+    newsapi_key = get_secret(
+        "NEWSAPI_KEY"
     )
 
     if newsapi_key:
@@ -2340,58 +2059,79 @@ def news():
                 timeout=15
             )
 
-            response.raise_for_status()
+            if response.status_code == 200:
 
-            data = response.json()
+                data = response.json()
 
-            for article in data.get(
-                "articles",
-                []
-            ):
+                for article in data.get(
+                    "articles",
+                    []
+                ):
 
-                source_data = article.get(
-                    "source",
-                    {}
-                )
-
-                add_article(
-                    articles,
-                    article.get(
-                        "publishedAt",
-                        ""
-                    ),
-                    article.get(
-                        "title",
-                        ""
-                    ),
-                    article.get(
-                        "url",
-                        ""
-                    ),
-                    source_data.get(
-                        "name",
-                        ""
+                    published = parse_news_date(
+                        article.get(
+                            "publishedAt"
+                        )
                     )
-                )
+
+                    if (
+                        published is None
+                        or published < cutoff
+                        or published > now + timedelta(
+                            minutes=5
+                        )
+                    ):
+
+                        continue
+
+                    articles.append(
+                        {
+                            "published":
+                                published,
+
+                            "title":
+                                article.get(
+                                    "title",
+                                    ""
+                                ),
+
+                            "url":
+                                article.get(
+                                    "url",
+                                    ""),
+
+                            "source":
+                                article.get(
+                                    "source",
+                                    {}
+                                ).get(
+                                    "name",
+                                    ""
+                                )
+                        }
+                    )
 
         except Exception:
 
             pass
+
+    # --------------------------------------------------------
+    # Google News RSS fallback / supplement
+    # --------------------------------------------------------
 
     searches = [
         "gold futures gold price",
         "gold Federal Reserve Fed",
         "gold Treasury yields",
         "gold US dollar DXY",
-        "gold inflation CPI PCE PPI",
-        "gold economic data"
+        "gold inflation CPI PCE PPI"
     ]
 
     for search_term in searches:
 
         try:
 
-            feed_url = (
+            url = (
                 "https://news.google.com/rss/search?"
                 f"q={quote(search_term)}"
                 "&hl=en-US"
@@ -2400,65 +2140,82 @@ def news():
             )
 
             feed = feedparser.parse(
-                feed_url
+                url
             )
 
             for entry in feed.entries:
 
-                published = (
+                published = parse_news_date(
                     entry.get(
                         "published",
                         ""
                     )
-                    or entry.get(
-                        "updated",
-                        ""
+                )
+
+                if (
+                    published is None
+                    or published < cutoff
+                    or published > now + timedelta(
+                        minutes=5
                     )
-                )
+                ):
 
-                title = entry.get(
-                    "title",
-                    ""
-                )
-
-                link = entry.get(
-                    "link",
-                    ""
-                )
+                    continue
 
                 source = ""
 
-                if hasattr(
-                    entry,
-                    "source"
-                ):
+                try:
 
                     source = entry.source.get(
                         "title",
                         ""
                     )
 
-                add_article(
-                    articles,
-                    published,
-                    title,
-                    link,
-                    source
+                except Exception:
+
+                    pass
+
+                articles.append(
+                    {
+                        "published":
+                            published,
+
+                        "title":
+                            entry.get(
+                                "title",
+                                ""
+                            ),
+
+                        "url":
+                            entry.get(
+                                "link",
+                                ""
+                            ),
+
+                        "source":
+                            source
+                    }
                 )
 
         except Exception:
 
             continue
 
+    # --------------------------------------------------------
+    # Remove duplicates
+    # --------------------------------------------------------
+
     unique = {}
 
     for article in articles:
 
-        key = article[
-            "title"
-        ].lower().strip()
+        key = (
+            article["title"]
+            .strip()
+            .lower()
+        )
 
-        if key not in unique:
+        if key and key not in unique:
 
             unique[key] = article
 
@@ -2468,7 +2225,7 @@ def news():
 
     articles.sort(
         key=lambda x:
-            x["published_dt"],
+            x["published"],
         reverse=True
     )
 
@@ -2476,10 +2233,8 @@ def news():
 
 
 # ============================================================
-# LOAD DATA
+# LOAD MARKET DATA
 # ============================================================
-
-history = load_history()
 
 gold = yf_quote(
     GOLD_TICKER
@@ -2497,14 +2252,13 @@ articles = news()
 
 
 # ============================================================
-# SCORE
+# CALCULATE SCORES
 # ============================================================
 
 (
     macro_bias,
     macro_confidence,
     macro_reasons,
-    component_scores,
     macro_total
 ) = macro_score(
     gold,
@@ -2531,24 +2285,30 @@ articles = news()
 
 
 # ============================================================
-# CREATE NEW PREDICTION WHEN DUE
+# LOAD PREDICTION HISTORY
 # ============================================================
 
-latest_prediction = get_latest_prediction(
-    history,
-    GOLD_TICKER
+history = load_history()
+
+
+# ============================================================
+# CREATE NEW PREDICTION
+# ============================================================
+
+latest = get_latest_prediction(
+    history
 )
 
-create_new_prediction = False
+should_create = False
 
-if latest_prediction is None:
+if latest is None:
 
-    create_new_prediction = True
+    should_create = True
 
 else:
 
     latest_time = pd.to_datetime(
-        latest_prediction[
+        latest[
             "timestamp_utc"
         ],
         utc=True,
@@ -2566,15 +2326,14 @@ else:
             - latest_time.to_pydatetime()
         ).total_seconds() / 60
 
-        if (
-            age_minutes
-            >= PREDICTION_INTERVAL_MINUTES
+        if age_minutes >= (
+            PREDICTION_INTERVAL_MINUTES
         ):
 
-            create_new_prediction = True
+            should_create = True
 
 
-if create_new_prediction:
+if should_create:
 
     history = create_prediction(
         history,
@@ -2597,16 +2356,14 @@ if create_new_prediction:
 
 
 # ============================================================
-# CHECK OLD PREDICTIONS
+# CHECK COMPLETED PREDICTIONS
 # ============================================================
 
-history, prediction_results_changed = (
-    check_predictions(
-        history
-    )
+history, changed = check_predictions(
+    history
 )
 
-if prediction_results_changed:
+if changed:
 
     save_history(
         history,
@@ -2615,7 +2372,7 @@ if prediction_results_changed:
 
 
 # ============================================================
-# PAGE
+# PAGE TITLE
 # ============================================================
 
 st.title(
@@ -2628,8 +2385,8 @@ st.caption(
 )
 
 st.info(
-    f"Monitoring: **{GOLD_CONTRACT_NAME}** "
-    f"(`{GOLD_TICKER}`)"
+    f"Currently monitoring: "
+    f"**{GOLD_CONTRACT_NAME}**"
 )
 
 
@@ -2643,7 +2400,7 @@ st.sidebar.header(
 
 refresh = st.sidebar.selectbox(
     "Refresh interval",
-    options=[
+    [
         15,
         30,
         60,
@@ -2651,23 +2408,23 @@ refresh = st.sidebar.selectbox(
         300,
         900
     ],
-    format_func=lambda x: (
-        f"{x} seconds"
-        if x < 60
-        else (
-            "1 minute"
-            if x == 60
-            else f"{x // 60} minutes"
+    index=2,
+    format_func=lambda x:
+        (
+            f"{x} seconds"
+            if x < 60
+            else (
+                "1 minute"
+                if x == 60
+                else f"{x // 60} minutes"
+            )
         )
-    ),
-    index=2
 )
 
 st.sidebar.info(
-    "The dashboard refreshes at the selected "
-    "interval. New prediction snapshots are "
-    f"created approximately every "
-    f"{PREDICTION_INTERVAL_MINUTES} minutes."
+    "The dashboard refreshes automatically. "
+    "A new prediction snapshot is normally "
+    "created every 15 minutes."
 )
 
 st.sidebar.markdown(
@@ -2686,51 +2443,83 @@ CME:
 """
 )
 
-st.sidebar.markdown(
-    f"""
-### Prediction Testing
-
-Threshold:
-
-**${PREDICTION_THRESHOLD:.2f}**
-
-Horizons:
-
-- 15 minutes
-- 30 minutes
-- 1 hour
-- 2 hours
-"""
-)
-
-if GITHUB_TOKEN and GITHUB_REPO:
+if github_connected:
 
     st.sidebar.success(
-        "💾 GitHub prediction storage: CONNECTED"
+        "💾 GitHub storage: CONNECTED"
     )
 
 else:
 
     st.sidebar.error(
-        "💾 GitHub prediction storage: NOT CONNECTED"
+        "💾 GitHub storage: NOT CONNECTED"
     )
 
-st.sidebar.warning(
-    "Educational monitoring only. "
-    "This app does not place trades."
-)
+
+# ============================================================
+# GITHUB DIAGNOSTICS
+# ============================================================
+
+with st.sidebar.expander(
+    "GitHub connection details"
+):
+
+    if GITHUB_TOKEN:
+
+        st.write(
+            "Token detected: ✅"
+        )
+
+        # We deliberately DO NOT display the token.
+
+        if GITHUB_TOKEN.startswith(
+            "github_pat_"
+        ):
+
+            st.write(
+                "Token type: Fine-grained ✅"
+            )
+
+        else:
+
+            st.write(
+                "Token type: Not recognized "
+                "as a fine-grained token ⚠️"
+            )
+
+    else:
+
+        st.write(
+            "Token detected: ❌"
+        )
+
+    st.write(
+        f"Repository: `{GITHUB_REPO or 'MISSING'}`"
+    )
+
+    st.write(
+        f"Branch: `{GITHUB_BRANCH}`"
+    )
+
+    st.write(
+        f"History file: `{GITHUB_HISTORY_FILE}`"
+    )
+
+    st.write(
+        github_message
+    )
 
 
 # ============================================================
 # TOP METRICS
 # ============================================================
 
-column1, column2, column3, column4 = st.columns(4)
+col1, col2, col3, col4 = st.columns(4)
 
 
 if gold and "price" in gold:
 
-    column1.metric(
+    col1.metric(
         "🥇 Gold — Oct 2026",
         f"${gold['price']:,.2f}",
         f"{gold['pct']:+.2f}%"
@@ -2738,7 +2527,7 @@ if gold and "price" in gold:
 
 else:
 
-    column1.metric(
+    col1.metric(
         "🥇 Gold — Oct 2026",
         "Unavailable"
     )
@@ -2746,7 +2535,7 @@ else:
 
 if dxy and "price" in dxy:
 
-    column2.metric(
+    col2.metric(
         "💵 DXY",
         f"{dxy['price']:.3f}",
         f"{dxy['pct']:+.2f}%"
@@ -2754,7 +2543,7 @@ if dxy and "price" in dxy:
 
 else:
 
-    column2.metric(
+    col2.metric(
         "💵 DXY",
         "Unavailable"
     )
@@ -2762,7 +2551,7 @@ else:
 
 if treasury and "price" in treasury:
 
-    column3.metric(
+    col3.metric(
         "🇺🇸 10Y Treasury",
         f"{treasury['price']:.2f}%",
         f"{treasury['pct']:+.2f}%"
@@ -2770,17 +2559,150 @@ if treasury and "price" in treasury:
 
 else:
 
-    column3.metric(
+    col3.metric(
         "🇺🇸 10Y Treasury",
         "Unavailable"
     )
 
 
-column4.metric(
+col4.metric(
     "📊 Overall Bias",
     overall_bias,
     f"Confidence {overall_confidence}/10"
 )
+
+
+# ============================================================
+# CURRENT ASSESSMENT
+# ============================================================
+
+st.subheader(
+    "🎯 Current Market Assessment"
+)
+
+a1, a2 = st.columns(2)
+
+with a1:
+
+    st.metric(
+        "Macro",
+        macro_bias,
+        f"Confidence {macro_confidence}/10"
+    )
+
+with a2:
+
+    st.metric(
+        "Technical",
+        technical_bias
+    )
+
+
+# ============================================================
+# TECHNICAL LEVELS
+# ============================================================
+
+st.subheader(
+    "📐 Gold Technical Levels"
+)
+
+if technical and "price" in technical:
+
+    l1, l2, l3, l4 = st.columns(4)
+
+    l1.metric(
+        "Support",
+        f"${technical['support']:,.2f}"
+    )
+
+    l2.metric(
+        "Resistance",
+        f"${technical['resistance']:,.2f}"
+    )
+
+    l3.metric(
+        "20 MA",
+        f"${technical['ma20']:,.2f}"
+    )
+
+    l4.metric(
+        "50 MA",
+        f"${technical['ma50']:,.2f}"
+    )
+
+    h1, h2, h3, h4 = st.columns(4)
+
+    h1.metric(
+        "Today's High",
+        f"${technical['today_high']:,.2f}"
+    )
+
+    h2.metric(
+        "Today's Low",
+        f"${technical['today_low']:,.2f}"
+    )
+
+    h3.metric(
+        "Previous Day High",
+        f"${technical['previous_day_high']:,.2f}"
+    )
+
+    h4.metric(
+        "Previous Day Low",
+        f"${technical['previous_day_low']:,.2f}"
+    )
+
+else:
+
+    st.warning(
+        "Technical Gold data unavailable."
+    )
+
+
+# ============================================================
+# ANALYSIS
+# ============================================================
+
+st.subheader(
+    "🔎 What the Monitor Sees"
+)
+
+for reason in technical_reasons:
+
+    st.write(
+        "• " + reason
+    )
+
+for reason in macro_reasons:
+
+    st.write(
+        "• " + reason
+    )
+
+
+if overall_bias == "BULLISH":
+
+    st.success(
+        f"🟢 Overall environment: "
+        f"BULLISH — "
+        f"Confidence {overall_confidence}/10"
+    )
+
+elif overall_bias == "BEARISH":
+
+    st.error(
+        f"🔴 Overall environment: "
+        f"BEARISH — "
+        f"Confidence {overall_confidence}/10"
+    )
+
+else:
+
+    st.warning(
+        f"🟡 Overall environment: "
+        f"NEUTRAL / WAIT — "
+        f"Confidence {overall_confidence}/10"
+    )
 
 
 # ============================================================
@@ -2791,15 +2713,15 @@ st.subheader(
     "🧪 Prediction Tracker"
 )
 
-st.write(
-    "The monitor records its predictions and "
-    "later checks what Gold actually did at "
-    "15-minute, 30-minute, 1-hour and "
-    "2-hour intervals."
+st.caption(
+    "The monitor records its own predictions "
+    "and later checks whether the market moved "
+    "in the predicted direction."
 )
 
 current_history = history[
-    history["contract"] == GOLD_TICKER
+    history["contract"]
+    == GOLD_TICKER
 ].copy()
 
 if not current_history.empty:
@@ -2835,11 +2757,11 @@ if not current_history.empty:
         "result_2h"
     ]
 
-    display_df = current_history[
+    display = current_history[
         display_columns
-    ].head(15).copy()
+    ].head(15)
 
-    display_df = display_df.rename(
+    display = display.rename(
         columns={
             "timestamp_et":
                 "Prediction Time",
@@ -2874,7 +2796,7 @@ if not current_history.empty:
     )
 
     st.dataframe(
-        display_df,
+        display,
         use_container_width=True,
         hide_index=True
     )
@@ -2894,56 +2816,52 @@ st.subheader(
     "📊 Prediction Performance"
 )
 
-st.caption(
-    "Accuracy is based only on completed "
-    "directional predictions."
-)
-
-current_stats = performance_stats(
+stats = performance_stats(
     history,
     GOLD_TICKER
 )
 
-all_stats = performance_stats(
-    history,
-    None
-)
+p1, p2, p3, p4 = st.columns(4)
 
-perf1, perf2, perf3, perf4 = st.columns(4)
+for column, horizon, label in [
+    (
+        p1,
+        "15m",
+        "15 Minute"
+    ),
+    (
+        p2,
+        "30m",
+        "30 Minute"
+    ),
+    (
+        p3,
+        "1h",
+        "1 Hour"
+    ),
+    (
+        p4,
+        "2h",
+        "2 Hour"
+    )
+]:
 
-for column, horizon in zip(
-    [perf1, perf2, perf3, perf4],
-    ["15m", "30m", "1h", "2h"]
-):
+    item = stats.get(
+        horizon,
+        {}
+    )
 
-    stats = current_stats[
-        horizon
-    ]
+    accuracy = item.get(
+        "accuracy"
+    )
 
-    label = {
-        "15m":
-            "15 Minute",
-
-        "30m":
-            "30 Minute",
-
-        "1h":
-            "1 Hour",
-
-        "2h":
-            "2 Hour"
-    }[horizon]
-
-    if (
-        stats
-        and stats["accuracy"] is not None
-    ):
+    if accuracy is not None:
 
         column.metric(
             label,
-            f"{stats['accuracy']:.1f}%",
-            f"{stats['correct']} correct / "
-            f"{stats['total']} tested"
+            f"{accuracy:.1f}%",
+            f"{item['correct']} correct / "
+            f"{item['total']} tested"
         )
 
     else:
@@ -2952,324 +2870,6 @@ for column, horizon in zip(
             label,
             "Not enough data"
         )
-
-
-# ============================================================
-# ALL CONTRACTS
-# ============================================================
-
-st.subheader(
-    "🌎 All-Contract Performance"
-)
-
-all_perf1, all_perf2, all_perf3, all_perf4 = (
-    st.columns(4)
-)
-
-for column, horizon in zip(
-    [
-        all_perf1,
-        all_perf2,
-        all_perf3,
-        all_perf4
-    ],
-    ["15m", "30m", "1h", "2h"]
-):
-
-    stats = all_stats[
-        horizon
-    ]
-
-    label = {
-        "15m":
-            "15 Minute",
-
-        "30m":
-            "30 Minute",
-
-        "1h":
-            "1 Hour",
-
-        "2h":
-            "2 Hour"
-    }[horizon]
-
-    if (
-        stats
-        and stats["accuracy"] is not None
-    ):
-
-        column.metric(
-            label,
-            f"{stats['accuracy']:.1f}%",
-            f"{stats['correct']} correct / "
-            f"{stats['total']} tested"
-        )
-
-    else:
-
-        column.metric(
-            label,
-            "Not enough data"
-        )
-
-
-# ============================================================
-# CONFIDENCE TEST
-# ============================================================
-
-st.subheader(
-    "🎯 Does Higher Confidence Actually Work?"
-)
-
-confidence_df = confidence_stats(
-    history,
-    GOLD_TICKER
-)
-
-if not confidence_df.empty:
-
-    st.dataframe(
-        confidence_df,
-        use_container_width=True,
-        hide_index=True
-    )
-
-else:
-
-    st.info(
-        "Not enough completed 1-hour predictions "
-        "to evaluate confidence yet."
-    )
-
-
-# ============================================================
-# CURRENT ASSESSMENT
-# ============================================================
-
-st.subheader(
-    "🎯 Current Market Assessment"
-)
-
-assessment1, assessment2 = st.columns(2)
-
-with assessment1:
-
-    st.markdown(
-        "### 🌎 Macro"
-    )
-
-    st.metric(
-        "Macro Bias",
-        macro_bias,
-        f"Confidence {macro_confidence}/10"
-    )
-
-with assessment2:
-
-    st.markdown(
-        "### 📈 Technical"
-    )
-
-    st.metric(
-        "Technical Bias",
-        technical_bias
-    )
-
-
-# ============================================================
-# TECHNICAL LEVELS
-# ============================================================
-
-st.subheader(
-    "📐 Gold Technical Levels"
-)
-
-if technical and "price" in technical:
-
-    level1, level2, level3, level4 = (
-        st.columns(4)
-    )
-
-    level1.metric(
-        "Support",
-        f"${technical['support']:,.2f}"
-    )
-
-    level2.metric(
-        "Resistance",
-        f"${technical['resistance']:,.2f}"
-    )
-
-    level3.metric(
-        "20 MA",
-        f"${technical['ma20']:,.2f}"
-    )
-
-    level4.metric(
-        "50 MA",
-        f"${technical['ma50']:,.2f}"
-    )
-
-    range1, range2, range3, range4 = (
-        st.columns(4)
-    )
-
-    range1.metric(
-        "Today's High",
-        f"${technical['today_high']:,.2f}"
-    )
-
-    range2.metric(
-        "Today's Low",
-        f"${technical['today_low']:,.2f}"
-    )
-
-    range3.metric(
-        "Prev. Day High",
-        f"${technical['previous_day_high']:,.2f}"
-    )
-
-    range4.metric(
-        "Prev. Day Low",
-        f"${technical['previous_day_low']:,.2f}"
-    )
-
-else:
-
-    st.warning(
-        "Technical Gold data is unavailable."
-    )
-
-
-# ============================================================
-# TECHNICAL ANALYSIS
-# ============================================================
-
-st.subheader(
-    "🔎 Technical Analysis"
-)
-
-for reason in technical_reasons:
-
-    st.write(
-        "• " + reason
-    )
-
-
-# ============================================================
-# MACRO ANALYSIS
-# ============================================================
-
-st.subheader(
-    "🌎 Macro Analysis"
-)
-
-for reason in macro_reasons:
-
-    st.write(
-        "• " + reason
-    )
-
-
-# ============================================================
-# OVERALL
-# ============================================================
-
-st.subheader(
-    "🧠 Overall Monitor Assessment"
-)
-
-if overall_bias == "BULLISH":
-
-    st.success(
-        f"🟢 Overall environment is bullish. "
-        f"Current confidence: "
-        f"{overall_confidence}/10."
-    )
-
-elif overall_bias == "BEARISH":
-
-    st.error(
-        f"🔴 Overall environment is bearish. "
-        f"Current confidence: "
-        f"{overall_confidence}/10."
-    )
-
-else:
-
-    st.warning(
-        f"🟡 Conditions are mixed. "
-        f"Current environment is WAIT. "
-        f"Confidence: {overall_confidence}/10."
-    )
-
-
-# ============================================================
-# NEWS
-# ============================================================
-
-st.subheader(
-    "📰 Recent Gold / Macro Headlines"
-)
-
-if articles:
-
-    st.caption(
-        f"Articles published within the last "
-        f"{NEWS_MAX_AGE_HOURS} hours. "
-        "Times are Eastern Time."
-    )
-
-    for article in articles[:10]:
-
-        published_dt = article[
-            "published_dt"
-        ]
-
-        formatted_time = published_dt.astimezone(
-            EASTERN
-        ).strftime(
-            "%b %d, %Y at %I:%M %p ET"
-        )
-
-        age = article_age_text(
-            published_dt
-        )
-
-        title = article[
-            "title"
-        ]
-
-        link = article[
-            "link"
-        ]
-
-        source = article.get(
-            "source",
-            ""
-        )
-
-        source_text = (
-            f" • {source}"
-            if source
-            else ""
-        )
-
-        st.markdown(
-            f"**[{title}]({link})**  \n"
-            f"🕒 {age} — "
-            f"{formatted_time}"
-            f"{source_text}"
-        )
-
-        st.divider()
-
-else:
-
-    st.info(
-        "No sufficiently recent headlines returned."
-    )
 
 
 # ============================================================
@@ -3280,51 +2880,136 @@ st.subheader(
     "💾 Prediction Database"
 )
 
-total_predictions = len(
-    history
-)
-
-current_predictions = len(
-    history[
-        history["contract"]
-        == GOLD_TICKER
-    ]
-)
-
-contract_count = (
-    history["contract"].nunique()
-    if not history.empty
-    else 0
-)
-
 db1, db2, db3 = st.columns(3)
 
 db1.metric(
     "Total Predictions",
-    total_predictions
+    len(history)
 )
 
 db2.metric(
-    "Current Contract",
-    current_predictions
+    "October 2026",
+    len(
+        history[
+            history["contract"]
+            == GOLD_TICKER
+        ]
+    )
 )
 
 db3.metric(
     "Contracts Tracked",
-    contract_count
+    (
+        history["contract"].nunique()
+        if not history.empty
+        else 0
+    )
 )
 
-if GITHUB_TOKEN and GITHUB_REPO:
+if github_connected:
 
     st.success(
-        "💾 Prediction history is connected "
-        "to GitHub persistent storage."
+        "GitHub persistent storage is connected. "
+        "Prediction history will survive contract rolls."
     )
 
 else:
 
     st.error(
-        "GitHub persistent storage is not configured."
+        "GitHub persistent storage is not connected."
+    )
+
+
+# ============================================================
+# NEWS
+# ============================================================
+
+st.subheader(
+    "📰 Recent Gold / Macro News"
+)
+
+if articles:
+
+    st.caption(
+        f"Only articles from the last "
+        f"{NEWS_MAX_AGE_HOURS} hours are shown. "
+        "All timestamps are converted to Eastern Time."
+    )
+
+    for article in articles[:10]:
+
+        published = article[
+            "published"
+        ]
+
+        eastern_time = (
+            published
+            .astimezone(
+                EASTERN
+            )
+        )
+
+        age_minutes = int(
+            (
+                datetime.now(
+                    timezone.utc
+                )
+                - published
+            ).total_seconds()
+            / 60
+        )
+
+        if age_minutes < 1:
+
+            age_text = "just now"
+
+        elif age_minutes < 60:
+
+            age_text = (
+                f"{age_minutes}m ago"
+            )
+
+        elif age_minutes < 1440:
+
+            age_text = (
+                f"{age_minutes // 60}h ago"
+            )
+
+        else:
+
+            age_text = (
+                f"{age_minutes // 1440}d ago"
+            )
+
+        source = article.get(
+            "source",
+            ""
+        )
+
+        if source:
+
+            source_text = (
+                f" • {source}"
+            )
+
+        else:
+
+            source_text = ""
+
+        st.markdown(
+            f"**[{article['title']}]"
+            f"({article['url']})**  \n"
+            f"🕒 {age_text} — "
+            f"{eastern_time.strftime('%b %d, %Y %I:%M %p ET')}"
+            f"{source_text}"
+        )
+
+        st.divider()
+
+else:
+
+    st.info(
+        "No recent headlines found."
     )
 
 
@@ -3333,7 +3018,7 @@ else:
 # ============================================================
 
 with st.expander(
-    "Data source information"
+    "Data sources"
 ):
 
     st.write(
@@ -3342,55 +3027,42 @@ with st.expander(
     )
 
     st.write(
-        f"📋 CME contract: "
-        f"{GOLD_CME_SYMBOL}"
+        "💵 DXY: Yahoo Finance — DX-Y.NYB"
     )
 
     st.write(
-        "💵 DXY: Yahoo Finance — "
-        "DX-Y.NYB"
+        "🇺🇸 10Y Treasury: Yahoo Finance — ^TNX"
     )
 
     st.write(
-        "🇺🇸 10Y Treasury: Yahoo Finance — "
-        "^TNX"
+        "📰 News: NewsAPI / Google News RSS"
     )
 
     st.write(
-        "📰 News: NewsAPI when configured; "
-        "Google News RSS otherwise."
-    )
-
-    st.write(
-        "💾 Prediction database: "
-        f"GitHub — {GITHUB_HISTORY_FILE}"
+        f"💾 History: GitHub — "
+        f"{GITHUB_HISTORY_FILE}"
     )
 
 
 # ============================================================
-# LAST REFRESH
+# REFRESH
 # ============================================================
 
-now_eastern = datetime.now(
+now_et = datetime.now(
     EASTERN
 )
 
 st.caption(
-    "Last dashboard refresh: "
-    + now_eastern.strftime(
+    "Last refresh: "
+    + now_et.strftime(
         "%Y-%m-%d %I:%M:%S %p ET"
     )
 )
 
 st.caption(
-    f"Next refresh in approximately "
+    f"Automatic refresh every "
     f"{refresh} seconds."
 )
-
-
-# ============================================================
-# AUTOMATIC REFRESH
-# ============================================================
 
 time.sleep(
     refresh
