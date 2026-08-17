@@ -3064,8 +3064,3 @@ st.caption(
     f"{refresh} seconds."
 )
 
-time.sleep(
-    refresh
-)
-
-st.rerun()
