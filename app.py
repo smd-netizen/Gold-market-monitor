@@ -45,26 +45,13 @@ REQUEST_HEADERS = {
 
 def yf_quote(ticker, multiplier=1.0):
     """
-    Get the latest Yahoo Finance price.
-
-    multiplier is used for instruments such as ^TNX,
-    which Yahoo quotes approximately 10x the actual
-    Treasury yield.
-
-    Returns:
-        price
-        previous_close
-        change
-        pct
+    Get the latest Yahoo Finance price and compare it
+    with the previous trading day's close.
     """
 
     try:
 
         stock = yf.Ticker(ticker)
-
-        # ----------------------------------------------------
-        # Intraday data
-        # ----------------------------------------------------
 
         intraday = stock.history(
             period="1d",
@@ -88,10 +75,6 @@ def yf_quote(ticker, multiplier=1.0):
                 dtype=float
             )
 
-        # ----------------------------------------------------
-        # Latest price
-        # ----------------------------------------------------
-
         if not closes.empty:
 
             raw_price = float(
@@ -100,7 +83,6 @@ def yf_quote(ticker, multiplier=1.0):
 
         else:
 
-            # Fall back to daily data.
             daily = stock.history(
                 period="5d",
                 interval="1d",
@@ -130,10 +112,6 @@ def yf_quote(ticker, multiplier=1.0):
             raw_price = float(
                 daily_closes.iloc[-1]
             )
-
-        # ----------------------------------------------------
-        # Previous trading day close
-        # ----------------------------------------------------
 
         daily = stock.history(
             period="5d",
@@ -165,12 +143,11 @@ def yf_quote(ticker, multiplier=1.0):
 
                 previous_raw = raw_price
 
-        # ----------------------------------------------------
-        # Apply multiplier
-        # ----------------------------------------------------
-
         price = raw_price * multiplier
-        previous_close = previous_raw * multiplier
+
+        previous_close = (
+            previous_raw * multiplier
+        )
 
         change = (
             price - previous_close
@@ -205,23 +182,16 @@ def yf_quote(ticker, multiplier=1.0):
 # ============================================================
 
 def get_10y_treasury():
-    """
-    Get the 10-Year Treasury yield from Yahoo Finance.
-
-    Yahoo's ^TNX quote is approximately 10x the actual
-    percentage yield.
-
-    Example:
-        Yahoo ^TNX = 46.8
-        Actual 10Y yield = 4.68%
-    """
 
     result = yf_quote(
         "^TNX",
         multiplier=0.1
     )
 
-    if not result or "price" not in result:
+    if (
+        not result
+        or "price" not in result
+    ):
 
         return {
             "error": (
@@ -238,13 +208,626 @@ def get_10y_treasury():
 
 
 # ============================================================
+# GOLD TECHNICAL DATA
+# ============================================================
+
+def get_gold_technical_data():
+    """
+    Get intraday Gold futures data and calculate:
+
+    - Current price
+    - Today's high
+    - Today's low
+    - Previous day's high
+    - Previous day's low
+    - 20-period moving average
+    - 50-period moving average
+    - Nearby support
+    - Nearby resistance
+    """
+
+    try:
+
+        ticker = yf.Ticker(
+            "GC=F"
+        )
+
+        # ----------------------------------------------------
+        # Intraday data
+        # ----------------------------------------------------
+
+        intraday = ticker.history(
+            period="5d",
+            interval="15m",
+            auto_adjust=False
+        )
+
+        if (
+            intraday.empty
+            or "High" not in intraday.columns
+            or "Low" not in intraday.columns
+            or "Close" not in intraday.columns
+        ):
+
+            return {
+                "error": (
+                    "Gold technical data unavailable."
+                )
+            }
+
+        intraday = intraday.copy()
+
+        intraday["Close"] = pd.to_numeric(
+            intraday["Close"],
+            errors="coerce"
+        )
+
+        intraday["High"] = pd.to_numeric(
+            intraday["High"],
+            errors="coerce"
+        )
+
+        intraday["Low"] = pd.to_numeric(
+            intraday["Low"],
+            errors="coerce"
+        )
+
+        intraday = intraday.dropna(
+            subset=[
+                "Close",
+                "High",
+                "Low"
+            ]
+        )
+
+        if intraday.empty:
+
+            return {
+                "error": (
+                    "No valid Gold technical data."
+                )
+            }
+
+        current_price = float(
+            intraday["Close"].iloc[-1]
+        )
+
+        # ----------------------------------------------------
+        # Moving averages
+        # ----------------------------------------------------
+
+        ma20 = float(
+            intraday["Close"]
+            .rolling(20)
+            .mean()
+            .iloc[-1]
+        )
+
+        ma50 = float(
+            intraday["Close"]
+            .rolling(50)
+            .mean()
+            .iloc[-1]
+        )
+
+        # ----------------------------------------------------
+        # Today's data
+        # ----------------------------------------------------
+
+        index_dates = (
+            intraday.index
+            .tz_convert(EASTERN)
+            .date
+        )
+
+        today = datetime.now(
+            EASTERN
+        ).date()
+
+        today_data = intraday[
+            index_dates == today
+        ]
+
+        if today_data.empty:
+
+            today_data = intraday.tail(
+                min(26, len(intraday))
+            )
+
+        today_high = float(
+            today_data["High"].max()
+        )
+
+        today_low = float(
+            today_data["Low"].min()
+        )
+
+        # ----------------------------------------------------
+        # Previous trading day
+        #
+        # Find the most recent date before today.
+        # ----------------------------------------------------
+
+        unique_dates = sorted(
+            set(index_dates)
+        )
+
+        previous_day_data = pd.DataFrame()
+
+        previous_day = None
+
+        for date_value in reversed(
+            unique_dates
+        ):
+
+            if date_value < today:
+
+                previous_day = date_value
+
+                break
+
+        if previous_day is not None:
+
+            previous_day_data = intraday[
+                index_dates == previous_day
+            ]
+
+        if previous_day_data.empty:
+
+            previous_day_data = intraday.tail(
+                min(26, len(intraday))
+            )
+
+        previous_day_high = float(
+            previous_day_data["High"].max()
+        )
+
+        previous_day_low = float(
+            previous_day_data["Low"].min()
+        )
+
+        # ----------------------------------------------------
+        # Nearby support / resistance
+        #
+        # We use recent swing highs/lows and the previous
+        # day's levels.
+        # ----------------------------------------------------
+
+        recent = intraday.tail(
+            min(100, len(intraday))
+        )
+
+        swing_highs = []
+        swing_lows = []
+
+        highs = recent[
+            "High"
+        ].tolist()
+
+        lows = recent[
+            "Low"
+        ].tolist()
+
+        # ----------------------------------------------------
+        # Simple local swing detection.
+        # ----------------------------------------------------
+
+        for i in range(
+            2,
+            len(highs) - 2
+        ):
+
+            if (
+                highs[i] >= highs[i - 1]
+                and highs[i] >= highs[i - 2]
+                and highs[i] >= highs[i + 1]
+                and highs[i] >= highs[i + 2]
+            ):
+
+                swing_highs.append(
+                    highs[i]
+                )
+
+        for i in range(
+            2,
+            len(lows) - 2
+        ):
+
+            if (
+                lows[i] <= lows[i - 1]
+                and lows[i] <= lows[i - 2]
+                and lows[i] <= lows[i + 1]
+                and lows[i] <= lows[i + 2]
+            ):
+
+                swing_lows.append(
+                    lows[i]
+                )
+
+        # ----------------------------------------------------
+        # Add previous-day levels.
+        # ----------------------------------------------------
+
+        resistance_candidates = [
+            value
+            for value in (
+                swing_highs
+                + [previous_day_high]
+            )
+            if value > current_price
+        ]
+
+        support_candidates = [
+            value
+            for value in (
+                swing_lows
+                + [previous_day_low]
+            )
+            if value < current_price
+        ]
+
+        # ----------------------------------------------------
+        # Nearest levels.
+        # ----------------------------------------------------
+
+        if resistance_candidates:
+
+            resistance = min(
+                resistance_candidates
+            )
+
+        else:
+
+            resistance = today_high
+
+        if support_candidates:
+
+            support = max(
+                support_candidates
+            )
+
+        else:
+
+            support = today_low
+
+        return {
+            "price": current_price,
+            "today_high": today_high,
+            "today_low": today_low,
+            "previous_day_high": previous_day_high,
+            "previous_day_low": previous_day_low,
+            "ma20": ma20,
+            "ma50": ma50,
+            "support": support,
+            "resistance": resistance
+        }
+
+    except Exception as e:
+
+        return {
+            "error": str(e)
+        }
+
+
+# ============================================================
+# TECHNICAL SCORING
+# ============================================================
+
+def technical_score(
+    technical
+):
+    """
+    Determine short-term technical bias.
+
+    This deliberately stays simple.
+
+    Price above MA20 and MA50:
+        bullish
+
+    Price below MA20 and MA50:
+        bearish
+
+    Price between:
+        mixed
+
+    Proximity to support/resistance is used as a warning,
+    not as a direct directional score.
+    """
+
+    if (
+        not technical
+        or "price" not in technical
+    ):
+
+        return (
+            "UNAVAILABLE",
+            0,
+            []
+        )
+
+    price = technical[
+        "price"
+    ]
+
+    ma20 = technical[
+        "ma20"
+    ]
+
+    ma50 = technical[
+        "ma50"
+    ]
+
+    support = technical[
+        "support"
+    ]
+
+    resistance = technical[
+        "resistance"
+    ]
+
+    score = 0
+
+    reasons = []
+
+    # ========================================================
+    # MOVING AVERAGES
+    # ========================================================
+
+    if price > ma20:
+
+        score += 1
+
+        reasons.append(
+            "Gold is above its 20-period moving average."
+        )
+
+    else:
+
+        score -= 1
+
+        reasons.append(
+            "Gold is below its 20-period moving average."
+        )
+
+    if price > ma50:
+
+        score += 1
+
+        reasons.append(
+            "Gold is above its 50-period moving average."
+        )
+
+    else:
+
+        score -= 1
+
+        reasons.append(
+            "Gold is below its 50-period moving average."
+        )
+
+    # ========================================================
+    # MA RELATIONSHIP
+    # ========================================================
+
+    if ma20 > ma50:
+
+        score += 1
+
+        reasons.append(
+            "The 20-period average is above the "
+            "50-period average."
+        )
+
+    elif ma20 < ma50:
+
+        score -= 1
+
+        reasons.append(
+            "The 20-period average is below the "
+            "50-period average."
+        )
+
+    else:
+
+        reasons.append(
+            "The moving averages are essentially flat."
+        )
+
+    # ========================================================
+    # BIAS
+    # ========================================================
+
+    if score >= 2:
+
+        bias = "BULLISH"
+
+    elif score <= -2:
+
+        bias = "BEARISH"
+
+    else:
+
+        bias = "MIXED"
+
+    # ========================================================
+    # DISTANCE TO LEVELS
+    # ========================================================
+
+    if resistance > price:
+
+        resistance_distance = (
+            (
+                resistance - price
+            )
+            / price
+        ) * 100
+
+    else:
+
+        resistance_distance = 0
+
+    if support < price:
+
+        support_distance = (
+            (
+                price - support
+            )
+            / price
+        ) * 100
+
+    else:
+
+        support_distance = 0
+
+    # --------------------------------------------------------
+    # Resistance warning
+    # --------------------------------------------------------
+
+    if 0 < resistance_distance <= 0.30:
+
+        reasons.append(
+            "⚠️ Gold is very close to nearby resistance."
+        )
+
+    elif 0 < resistance_distance <= 0.60:
+
+        reasons.append(
+            "Gold is approaching nearby resistance."
+        )
+
+    # --------------------------------------------------------
+    # Support warning
+    # --------------------------------------------------------
+
+    if 0 < support_distance <= 0.30:
+
+        reasons.append(
+            "⚠️ Gold is very close to nearby support."
+        )
+
+    elif 0 < support_distance <= 0.60:
+
+        reasons.append(
+            "Gold is approaching nearby support."
+        )
+
+    return (
+        bias,
+        score,
+        reasons
+    )
+
+
+# ============================================================
+# COMBINED BIAS
+# ============================================================
+
+def combined_bias(
+    macro_bias,
+    macro_confidence,
+    technical_bias,
+    technical_score_value
+):
+    """
+    Combine macro and technical readings.
+
+    Macro remains the larger component.
+
+    Technical analysis can confirm or weaken a macro signal.
+    """
+
+    score = 0
+
+    # --------------------------------------------------------
+    # Macro
+    # --------------------------------------------------------
+
+    if macro_bias == "BULLISH":
+
+        score += 2
+
+    elif macro_bias == "BEARISH":
+
+        score -= 2
+
+    # --------------------------------------------------------
+    # Technical
+    # --------------------------------------------------------
+
+    if technical_bias == "BULLISH":
+
+        score += 2
+
+    elif technical_bias == "BEARISH":
+
+        score -= 2
+
+    # --------------------------------------------------------
+    # Combined bias
+    # --------------------------------------------------------
+
+    if score >= 3:
+
+        bias = "BULLISH"
+
+    elif score <= -3:
+
+        bias = "BEARISH"
+
+    else:
+
+        bias = "NEUTRAL / WAIT"
+
+    # --------------------------------------------------------
+    # Confidence
+    #
+    # Start with macro confidence and adjust depending on
+    # whether technical analysis confirms or conflicts.
+    # --------------------------------------------------------
+
+    confidence = macro_confidence
+
+    if (
+        macro_bias == "BULLISH"
+        and technical_bias == "BULLISH"
+    ):
+
+        confidence += 1
+
+    elif (
+        macro_bias == "BEARISH"
+        and technical_bias == "BEARISH"
+    ):
+
+        confidence += 1
+
+    elif (
+        macro_bias != "NEUTRAL / WAIT"
+        and technical_bias != "MIXED"
+        and macro_bias != technical_bias
+    ):
+
+        confidence -= 1
+
+    confidence = max(
+        1,
+        min(
+            10,
+            confidence
+        )
+    )
+
+    return (
+        bias,
+        confidence
+    )
+
+
+# ============================================================
 # NEWS DATE PARSING
 # ============================================================
 
 def parse_news_date(value):
-    """
-    Convert a news timestamp into a timezone-aware UTC datetime.
-    """
 
     if not value:
 
@@ -270,9 +853,6 @@ def parse_news_date(value):
 
 
 def eastern_datetime(dt):
-    """
-    Convert a UTC datetime to Eastern Time.
-    """
 
     if dt is None:
 
@@ -284,16 +864,15 @@ def eastern_datetime(dt):
 
 
 def article_age_text(dt):
-    """
-    Return a human-readable article age.
-    """
 
     now = datetime.now(
         timezone.utc
     )
 
     seconds = int(
-        (now - dt).total_seconds()
+        (
+            now - dt
+        ).total_seconds()
     )
 
     if seconds < 0:
@@ -311,7 +890,10 @@ def article_age_text(dt):
         return f"{minutes}m ago"
 
     hours = minutes // 60
-    remaining_minutes = minutes % 60
+
+    remaining_minutes = (
+        minutes % 60
+    )
 
     if hours < 24:
 
@@ -330,7 +912,7 @@ def article_age_text(dt):
 
 
 # ============================================================
-# NEWS TITLE CLEANUP
+# NEWS CLEANUP
 # ============================================================
 
 def clean_title(title):
@@ -342,12 +924,6 @@ def clean_title(title):
     title = str(
         title
     ).strip()
-
-    # Google News frequently appends:
-    #
-    # " - Reuters"
-    #
-    # Remove that suffix.
 
     if " - " in title:
 
@@ -371,10 +947,6 @@ def clean_title(title):
 
     return title
 
-
-# ============================================================
-# ADD NEWS ARTICLE
-# ============================================================
 
 def add_article(
     articles,
@@ -411,20 +983,9 @@ def add_article(
         )
     )
 
-    # --------------------------------------------------------
-    # Reject old articles
-    # --------------------------------------------------------
-
     if published_dt < cutoff:
 
         return
-
-    # --------------------------------------------------------
-    # Reject genuine future timestamps.
-    #
-    # Allow a tiny 5-minute tolerance because publishers can
-    # have slightly incorrect clocks.
-    # --------------------------------------------------------
 
     future_limit = (
         now
@@ -454,10 +1015,6 @@ def add_article(
 def news():
 
     articles = []
-
-    # ========================================================
-    # NEWSAPI
-    # ========================================================
 
     newsapi_key = os.getenv(
         "NEWSAPI_KEY",
@@ -525,10 +1082,6 @@ def news():
         except Exception:
 
             pass
-
-    # ========================================================
-    # GOOGLE NEWS RSS
-    # ========================================================
 
     searches = [
         "gold futures gold price",
@@ -602,10 +1155,6 @@ def news():
 
             continue
 
-    # ========================================================
-    # REMOVE DUPLICATES
-    # ========================================================
-
     unique = {}
 
     for article in articles:
@@ -622,10 +1171,6 @@ def news():
         unique.values()
     )
 
-    # ========================================================
-    # NEWEST FIRST
-    # ========================================================
-
     articles.sort(
         key=lambda x: x[
             "published_dt"
@@ -637,30 +1182,14 @@ def news():
 
 
 # ============================================================
-# MARKET SCORING
+# MACRO SCORING
 # ============================================================
 
-def score(
+def macro_score(
     gold,
     dxy,
     treasury
 ):
-    """
-    Transparent gold-market scoring.
-
-    Maximum bullish score:
-        Gold      +3
-        DXY       +3
-        10Y       +2
-
-    Maximum bearish score:
-        Gold      -3
-        DXY       -3
-        10Y       -2
-
-    The 10Y has less weight because it is a slower-moving
-    macro indicator compared with gold and DXY.
-    """
 
     score_value = 0
 
@@ -672,9 +1201,9 @@ def score(
         "treasury": 0
     }
 
-    # ========================================================
+    # --------------------------------------------------------
     # GOLD
-    # ========================================================
+    # --------------------------------------------------------
 
     if gold and "pct" in gold:
 
@@ -742,9 +1271,9 @@ def score(
             "Gold quote unavailable."
         )
 
-    # ========================================================
+    # --------------------------------------------------------
     # DXY
-    # ========================================================
+    # --------------------------------------------------------
 
     if dxy and "pct" in dxy:
 
@@ -816,9 +1345,9 @@ def score(
             "DXY quote unavailable."
         )
 
-    # ========================================================
-    # 10Y TREASURY
-    # ========================================================
+    # --------------------------------------------------------
+    # 10Y
+    # --------------------------------------------------------
 
     if treasury and "pct" in treasury:
 
@@ -848,8 +1377,7 @@ def score(
             score_value += 1
 
             reasons.append(
-                "The 10Y Treasury yield is slightly lower, "
-                "which is mildly supportive of gold."
+                "The 10Y Treasury yield is slightly lower."
             )
 
         elif treasury_pct > 0.10:
@@ -874,8 +1402,7 @@ def score(
             score_value -= 1
 
             reasons.append(
-                "The 10Y Treasury yield is slightly higher, "
-                "which is a mild headwind for gold."
+                "The 10Y Treasury yield is slightly higher."
             )
 
         else:
@@ -890,21 +1417,13 @@ def score(
             "10Y Treasury data unavailable."
         )
 
-    # ========================================================
-    # FINAL BIAS
-    # ========================================================
+    # --------------------------------------------------------
+    # MACRO BIAS
+    # --------------------------------------------------------
 
-    if score_value >= 6:
-
-        bias = "BULLISH"
-
-    elif score_value >= 3:
+    if score_value >= 3:
 
         bias = "BULLISH"
-
-    elif score_value <= -6:
-
-        bias = "BEARISH"
 
     elif score_value <= -3:
 
@@ -913,13 +1432,6 @@ def score(
     else:
 
         bias = "NEUTRAL / WAIT"
-
-    # --------------------------------------------------------
-    # Confidence
-    #
-    # Convert the total possible score of +/-8 into a
-    # confidence value from roughly 1-10.
-    # --------------------------------------------------------
 
     confidence = round(
         5 + (
@@ -975,8 +1487,8 @@ refresh = st.sidebar.selectbox(
 )
 
 st.sidebar.info(
-    "The entire dashboard refreshes at the "
-    "selected interval."
+    "The entire dashboard refreshes at "
+    "the selected interval."
 )
 
 st.sidebar.warning(
@@ -1013,12 +1525,53 @@ dxy = yf_quote(
 
 treasury = get_10y_treasury()
 
+technical = get_gold_technical_data()
+
 articles = news()
 
-bias, confidence, reasons, component_scores, total_score = score(
+
+# ============================================================
+# MACRO SCORE
+# ============================================================
+
+(
+    macro_bias,
+    macro_confidence,
+    macro_reasons,
+    component_scores,
+    macro_total
+) = macro_score(
     gold,
     dxy,
     treasury
+)
+
+
+# ============================================================
+# TECHNICAL SCORE
+# ============================================================
+
+(
+    technical_bias,
+    technical_total,
+    technical_reasons
+) = technical_score(
+    technical
+)
+
+
+# ============================================================
+# COMBINED SCORE
+# ============================================================
+
+(
+    combined,
+    combined_confidence
+) = combined_bias(
+    macro_bias,
+    macro_confidence,
+    technical_bias,
+    technical_total
 )
 
 
@@ -1029,9 +1582,7 @@ bias, confidence, reasons, component_scores, total_score = score(
 column1, column2, column3, column4 = st.columns(4)
 
 
-# ============================================================
 # GOLD
-# ============================================================
 
 if gold and "price" in gold:
 
@@ -1049,9 +1600,7 @@ else:
     )
 
 
-# ============================================================
 # DXY
-# ============================================================
 
 if dxy and "price" in dxy:
 
@@ -1069,9 +1618,7 @@ else:
     )
 
 
-# ============================================================
 # 10Y
-# ============================================================
 
 if treasury and "price" in treasury:
 
@@ -1089,57 +1636,123 @@ else:
     )
 
 
-# ============================================================
-# BIAS
-# ============================================================
+# COMBINED BIAS
 
 column4.metric(
-    "📊 Monitor Bias",
-    bias,
-    f"Confidence {confidence}/10"
+    "📊 Overall Bias",
+    combined,
+    f"Confidence {combined_confidence}/10"
 )
 
 
 # ============================================================
-# SCORE BREAKDOWN
-# ============================================================
-
-st.subheader(
-    "📊 Market Signal Breakdown"
-)
-
-score_col1, score_col2, score_col3, score_col4 = st.columns(4)
-
-score_col1.metric(
-    "Gold",
-    f"{component_scores['gold']:+d}"
-)
-
-score_col2.metric(
-    "DXY",
-    f"{component_scores['dxy']:+d}"
-)
-
-score_col3.metric(
-    "10Y",
-    f"{component_scores['treasury']:+d}"
-)
-
-score_col4.metric(
-    "Total",
-    f"{total_score:+d}"
-)
-
-
-# ============================================================
-# ANALYSIS
+# MACRO VS TECHNICAL
 # ============================================================
 
 st.subheader(
-    "🔎 What the monitor sees"
+    "🎯 Market Assessment"
 )
 
-for reason in reasons:
+assessment1, assessment2 = st.columns(2)
+
+with assessment1:
+
+    st.markdown(
+        "### 🌎 Macro"
+    )
+
+    st.metric(
+        "Macro Bias",
+        macro_bias,
+        f"Confidence {macro_confidence}/10"
+    )
+
+with assessment2:
+
+    st.markdown(
+        "### 📈 Technical"
+    )
+
+    st.metric(
+        "Technical Bias",
+        technical_bias
+    )
+
+
+# ============================================================
+# TECHNICAL LEVELS
+# ============================================================
+
+st.subheader(
+    "📐 Gold Technical Levels"
+)
+
+if technical and "price" in technical:
+
+    level1, level2, level3, level4 = st.columns(4)
+
+    level1.metric(
+        "Support",
+        f"${technical['support']:,.2f}"
+    )
+
+    level2.metric(
+        "Resistance",
+        f"${technical['resistance']:,.2f}"
+    )
+
+    level3.metric(
+        "20 MA",
+        f"${technical['ma20']:,.2f}"
+    )
+
+    level4.metric(
+        "50 MA",
+        f"${technical['ma50']:,.2f}"
+    )
+
+    # --------------------------------------------------------
+    # Daily range
+    # --------------------------------------------------------
+
+    range1, range2, range3, range4 = st.columns(4)
+
+    range1.metric(
+        "Today's High",
+        f"${technical['today_high']:,.2f}"
+    )
+
+    range2.metric(
+        "Today's Low",
+        f"${technical['today_low']:,.2f}"
+    )
+
+    range3.metric(
+        "Prev. Day High",
+        f"${technical['previous_day_high']:,.2f}"
+    )
+
+    range4.metric(
+        "Prev. Day Low",
+        f"${technical['previous_day_low']:,.2f}"
+    )
+
+else:
+
+    st.warning(
+        "Technical Gold data is currently unavailable."
+    )
+
+
+# ============================================================
+# TECHNICAL ANALYSIS
+# ============================================================
+
+st.subheader(
+    "🔎 Technical Analysis"
+)
+
+for reason in technical_reasons:
 
     st.write(
         "• " + reason
@@ -1147,31 +1760,82 @@ for reason in reasons:
 
 
 # ============================================================
-# SIMPLE INTERPRETATION
+# COMBINED INTERPRETATION
 # ============================================================
 
-if bias == "BULLISH":
+st.subheader(
+    "🧠 What the Monitor Sees"
+)
 
-    st.success(
-        f"🟢 The indicators are currently leaning "
-        f"BULLISH for gold. Confidence: "
-        f"{confidence}/10."
+for reason in macro_reasons:
+
+    st.write(
+        "• " + reason
     )
 
-elif bias == "BEARISH":
+if technical:
 
-    st.error(
-        f"🔴 The indicators are currently leaning "
-        f"BEARISH for gold. Confidence: "
-        f"{confidence}/10."
-    )
+    for reason in technical_reasons:
+
+        st.write(
+            "• " + reason
+        )
+
+
+# ============================================================
+# OVERALL MESSAGE
+# ============================================================
+
+if combined == "BULLISH":
+
+    if (
+        macro_bias == "BULLISH"
+        and technical_bias == "BULLISH"
+    ):
+
+        st.success(
+            f"🟢 Macro and technical conditions are "
+            f"both bullish. Current confidence: "
+            f"{combined_confidence}/10."
+        )
+
+    else:
+
+        st.success(
+            f"🟢 The overall environment is bullish, "
+            f"but macro and technical conditions are "
+            f"not perfectly aligned. Confidence: "
+            f"{combined_confidence}/10."
+        )
+
+elif combined == "BEARISH":
+
+    if (
+        macro_bias == "BEARISH"
+        and technical_bias == "BEARISH"
+    ):
+
+        st.error(
+            f"🔴 Macro and technical conditions are "
+            f"both bearish. Current confidence: "
+            f"{combined_confidence}/10."
+        )
+
+    else:
+
+        st.error(
+            f"🔴 The overall environment is bearish, "
+            f"but macro and technical conditions are "
+            f"not perfectly aligned. Confidence: "
+            f"{combined_confidence}/10."
+        )
 
 else:
 
     st.warning(
-        f"🟡 The indicators are mixed. "
-        f"Current reading: NEUTRAL / WAIT. "
-        f"Confidence: {confidence}/10."
+        f"🟡 Macro and technical conditions are mixed. "
+        f"This is currently a WAIT environment. "
+        f"Confidence: {combined_confidence}/10."
     )
 
 
@@ -1222,15 +1886,11 @@ if articles:
             ""
         )
 
-        if source:
-
-            source_text = (
-                f" • {source}"
-            )
-
-        else:
-
-            source_text = ""
+        source_text = (
+            f" • {source}"
+            if source
+            else ""
+        )
 
         st.markdown(
             f"**[{title}]({link})**  \n"
@@ -1269,13 +1929,17 @@ with st.expander(
     )
 
     st.write(
+        "📈 Technical data: Yahoo Finance — GC=F"
+    )
+
+    st.write(
         "📰 News: NewsAPI when configured, "
         "otherwise Google News RSS."
     )
 
     st.write(
         "News timestamps are converted to "
-        "America/New_York (Eastern Time)."
+        "America/New_York."
     )
 
 
