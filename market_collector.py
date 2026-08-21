@@ -17,9 +17,7 @@ REPO = os.getenv(
     "smd-netizen/gold-market-monitor",
 )
 
-TOKEN = os.getenv(
-    "GITHUB_TOKEN"
-)
+TOKEN = os.getenv("GITHUB_TOKEN")
 
 HISTORY_FILE = "prediction_history.csv"
 
@@ -46,8 +44,7 @@ HEADERS = {
         "(KHTML, like Gecko) "
         "Chrome/139.0 Safari/537.36"
     ),
-    "Accept-Language":
-        "en-US,en;q=0.9",
+    "Accept-Language": "en-US,en;q=0.9",
 }
 
 
@@ -73,7 +70,6 @@ def parse_number(value):
         return None
 
     try:
-
         text = (
             str(value)
             .replace(",", "")
@@ -84,7 +80,6 @@ def parse_number(value):
         return float(text)
 
     except Exception:
-
         return None
 
 
@@ -94,9 +89,7 @@ def parse_number(value):
 
 def get_webull_gold():
 
-    print(
-        "Requesting Webull public Gold page..."
-    )
+    print("Requesting Webull public Gold page...")
 
     response = requests.get(
         WEBULL_URL,
@@ -116,15 +109,18 @@ def get_webull_gold():
     price = None
 
     price_patterns = [
-
-        r'"lastPrice"\s*:\s*"?(?:\$)?'
-        r'([0-9,]+\.[0-9]+)"?',
-
-        r'"last"\s*:\s*"?(?:\$)?'
-        r'([0-9,]+\.[0-9]+)"?',
-
-        r'"price"\s*:\s*"?(?:\$)?'
-        r'([0-9,]+\.[0-9]+)"?',
+        (
+            r'"lastPrice"\s*:\s*"?(?:\$)?'
+            r'([0-9,]+\.[0-9]+)"?'
+        ),
+        (
+            r'"last"\s*:\s*"?(?:\$)?'
+            r'([0-9,]+\.[0-9]+)"?'
+        ),
+        (
+            r'"price"\s*:\s*"?(?:\$)?'
+            r'([0-9,]+\.[0-9]+)"?'
+        ),
     ]
 
     for pattern in price_patterns:
@@ -143,7 +139,6 @@ def get_webull_gold():
                 candidate is not None
                 and 3000 <= candidate <= 10000
             ):
-
                 price = candidate
                 break
 
@@ -154,22 +149,24 @@ def get_webull_gold():
 
         raise RuntimeError(
             "Webull returned a page, but "
-            "the Gold price could not be "
-            "identified."
+            "the Gold price could not be identified."
         )
 
     gold_pct = None
 
     pct_patterns = [
-
-        r'"changePercent"\s*:\s*"?(?:\+)?'
-        r'(-?[0-9]+(?:\.[0-9]+)?)%?"?',
-
-        r'"changePct"\s*:\s*"?(?:\+)?'
-        r'(-?[0-9]+(?:\.[0-9]+)?)%?"?',
-
-        r'"percentChange"\s*:\s*"?(?:\+)?'
-        r'(-?[0-9]+(?:\.[0-9]+)?)%?"?',
+        (
+            r'"changePercent"\s*:\s*"?(?:\+)?'
+            r'(-?[0-9]+(?:\.[0-9]+)?)%?"?'
+        ),
+        (
+            r'"changePct"\s*:\s*"?(?:\+)?'
+            r'(-?[0-9]+(?:\.[0-9]+)?)%?"?'
+        ),
+        (
+            r'"percentChange"\s*:\s*"?(?:\+)?'
+            r'(-?[0-9]+(?:\.[0-9]+)?)%?"?'
+        ),
     ]
 
     for pattern in pct_patterns:
@@ -188,7 +185,6 @@ def get_webull_gold():
                 candidate is not None
                 and abs(candidate) <= 20
             ):
-
                 gold_pct = candidate
                 break
 
@@ -197,16 +193,18 @@ def get_webull_gold():
 
     if gold_pct is None:
 
-        patterns = [
-
-            r'"change"\s*:\s*"?(?:\+)?'
-            r'(-?[0-9]+(?:\.[0-9]+)?)"?',
-
-            r'"changeValue"\s*:\s*"?(?:\+)?'
-            r'(-?[0-9]+(?:\.[0-9]+)?)"?',
+        change_patterns = [
+            (
+                r'"change"\s*:\s*"?(?:\+)?'
+                r'(-?[0-9]+(?:\.[0-9]+)?)"?'
+            ),
+            (
+                r'"changeValue"\s*:\s*"?(?:\+)?'
+                r'(-?[0-9]+(?:\.[0-9]+)?)"?'
+            ),
         ]
 
-        for pattern in patterns:
+        for pattern in change_patterns:
 
             matches = re.findall(
                 pattern,
@@ -241,36 +239,28 @@ def get_webull_gold():
         f"Gold: ${price:,.2f}"
     )
 
-    if gold_pct is None:
-
-        print(
-            "Gold % change: unavailable"
-        )
-
-    else:
+    if gold_pct is not None:
 
         print(
             f"Gold % change: "
             f"{gold_pct:+.2f}%"
         )
 
+    else:
+
+        print(
+            "Gold % change: unavailable"
+        )
+
     return {
-
         "gold_price": price,
-
         "gold_pct": gold_pct,
-
-        "gold_retrieved_at_utc":
-            retrieved,
-
-        "gold_source":
-            WEBULL_URL,
-
-        "contract":
-            "1OZV6.CMX",
-
-        "contract_name":
-            "1-Ounce Gold — October 2026",
+        "gold_retrieved_at_utc": retrieved,
+        "gold_source": WEBULL_URL,
+        "contract": "1OZV6.CMX",
+        "contract_name": (
+            "1-Ounce Gold — October 2026"
+        ),
     }
 
 
@@ -312,13 +302,11 @@ def get_treasury():
         ):
 
             table.columns = [
-
                 " ".join(
                     str(part)
                     for part in column
                     if str(part) != "nan"
                 ).strip()
-
                 for column in table.columns
             ]
 
@@ -474,15 +462,9 @@ def get_treasury():
     )
 
     return {
-
-        "treasury_yield":
-            yield_value,
-
-        "treasury_date":
-            treasury_date,
-
-        "treasury_retrieved_at_utc":
-            retrieved,
+        "treasury_yield": yield_value,
+        "treasury_date": treasury_date,
+        "treasury_retrieved_at_utc": retrieved,
     }
 
 
@@ -495,11 +477,6 @@ def get_dxy():
     print(
         "Requesting DXY data..."
     )
-
-    # --------------------------------------------------------
-    # Use Yahoo's quote API rather than parsing arbitrary
-    # numbers from the HTML page.
-    # --------------------------------------------------------
 
     quote_url = (
         "https://query1.finance.yahoo.com/"
@@ -519,7 +496,7 @@ def get_dxy():
 
     chart = data.get(
         "chart",
-        {}
+        {},
     )
 
     results = chart.get(
@@ -537,22 +514,14 @@ def get_dxy():
 
     meta = result.get(
         "meta",
-        {}
+        {},
     )
-
-    # --------------------------------------------------------
-    # Current DXY
-    # --------------------------------------------------------
 
     dxy = parse_number(
         meta.get(
             "regularMarketPrice"
         )
     )
-
-    # --------------------------------------------------------
-    # Previous close
-    # --------------------------------------------------------
 
     previous_close = parse_number(
         meta.get(
@@ -567,13 +536,6 @@ def get_dxy():
             "but no current price."
         )
 
-    # --------------------------------------------------------
-    # Calculate percentage ourselves.
-    #
-    # This prevents us from accidentally grabbing
-    # an unrelated percentage from the webpage.
-    # --------------------------------------------------------
-
     dxy_pct = None
 
     if (
@@ -586,10 +548,6 @@ def get_dxy():
             / previous_close
             * 100
         )
-
-    # --------------------------------------------------------
-    # Sanity check
-    # --------------------------------------------------------
 
     if not (
         80 <= dxy <= 120
@@ -613,26 +571,313 @@ def get_dxy():
             f"{dxy_pct:+.2f}%"
         )
 
-    else:
+    return {
+        "dxy_price": dxy,
+        "dxy_pct": dxy_pct,
+        "dxy_retrieved_at_utc": retrieved,
+        "dxy_source": quote_url,
+    }
 
-        print(
-            "DXY change: unavailable"
+
+# ============================================================
+# TECHNICAL ANALYSIS
+# ============================================================
+
+def calculate_technical_analysis(
+    history,
+    current_price,
+):
+
+    prices = pd.to_numeric(
+        history.get(
+            "gold_price",
+            pd.Series(dtype=float),
+        ),
+        errors="coerce",
+    ).dropna()
+
+    prices = prices[
+        (prices >= 3000)
+        & (prices <= 10000)
+    ]
+
+    if len(prices) < 2:
+
+        return {
+            "technical_bias": "BUILDING DATA",
+            "technical_score": 0,
+            "support": current_price,
+            "resistance": current_price,
+            "ma20": current_price,
+            "ma50": current_price,
+        }
+
+    # Use only the most recent collected
+    # Webull observations.
+
+    prices = prices.tail(50)
+
+    ma20 = (
+        prices.tail(20).mean()
+        if len(prices) >= 20
+        else prices.mean()
+    )
+
+    ma50 = prices.mean()
+
+    recent = prices.tail(
+        min(12, len(prices))
+    )
+
+    support = recent.min()
+    resistance = recent.max()
+
+    score = 0
+
+    if current_price > ma20:
+        score += 1
+    else:
+        score -= 1
+
+    if current_price > ma50:
+        score += 1
+    else:
+        score -= 1
+
+    if len(prices) >= 4:
+
+        short_change = (
+            prices.iloc[-1]
+            - prices.iloc[-4]
         )
 
+        if short_change > 0:
+            score += 1
+
+        elif short_change < 0:
+            score -= 1
+
+    if score >= 2:
+
+        bias = "BULLISH"
+
+    elif score <= -2:
+
+        bias = "BEARISH"
+
+    else:
+
+        bias = "NEUTRAL / WAIT"
+
     return {
-
-        "dxy_price":
-            dxy,
-
-        "dxy_pct":
-            dxy_pct,
-
-        "dxy_retrieved_at_utc":
-            retrieved,
-
-        "dxy_source":
-            quote_url,
+        "technical_bias": bias,
+        "technical_score": float(score),
+        "support": float(support),
+        "resistance": float(resistance),
+        "ma20": float(ma20),
+        "ma50": float(ma50),
     }
+
+
+# ============================================================
+# MACRO ANALYSIS
+# ============================================================
+
+def calculate_macro(
+    dxy,
+    treasury,
+):
+
+    dxy_pct = dxy.get(
+        "dxy_pct"
+    )
+
+    score = 0
+
+    if (
+        dxy_pct is not None
+        and dxy_pct < 0
+    ):
+
+        score += 1
+
+    elif (
+        dxy_pct is not None
+        and dxy_pct > 0
+    ):
+
+        score -= 1
+
+    if score > 0:
+
+        bias = "BULLISH"
+
+    elif score < 0:
+
+        bias = "BEARISH"
+
+    else:
+
+        bias = "NEUTRAL / WAIT"
+
+    confidence = 5
+
+    if dxy_pct is not None:
+
+        if abs(dxy_pct) >= 0.50:
+            confidence = 9
+
+        elif abs(dxy_pct) >= 0.25:
+            confidence = 8
+
+        elif abs(dxy_pct) >= 0.10:
+            confidence = 7
+
+        else:
+            confidence = 5
+
+    return {
+        "macro_bias": bias,
+        "macro_confidence": confidence,
+    }
+
+
+# ============================================================
+# OVERALL SIGNAL
+# ============================================================
+
+def calculate_signal(
+    technical,
+    macro,
+):
+
+    technical_score = (
+        technical["technical_score"]
+    )
+
+    macro_bias = macro["macro_bias"]
+
+    score = technical_score
+
+    if macro_bias == "BULLISH":
+        score += 1
+
+    elif macro_bias == "BEARISH":
+        score -= 1
+
+    if score >= 2:
+
+        bias = "BULLISH"
+
+    elif score <= -2:
+
+        bias = "BEARISH"
+
+    else:
+
+        bias = "NEUTRAL / WAIT"
+
+    confidence = min(
+        10,
+        max(
+            3,
+            int(
+                5
+                + abs(score)
+            ),
+        ),
+    )
+
+    return bias, confidence
+
+
+# ============================================================
+# PREDICTION TARGETS
+# ============================================================
+
+def calculate_targets(
+    current_price,
+    technical,
+    overall_bias,
+):
+
+    resistance = technical["resistance"]
+    support = technical["support"]
+
+    if (
+        overall_bias == "BULLISH"
+    ):
+
+        distance = max(
+            0.25,
+            (
+                resistance
+                - current_price
+            ) * 0.15,
+        )
+
+        targets = {
+            "target_15m":
+                current_price + distance,
+
+            "target_30m":
+                current_price + distance * 1.5,
+
+            "target_1h":
+                current_price + distance * 2.0,
+
+            "target_2h":
+                current_price + distance * 2.75,
+        }
+
+    elif (
+        overall_bias == "BEARISH"
+    ):
+
+        distance = max(
+            0.25,
+            (
+                current_price
+                - support
+            ) * 0.15,
+        )
+
+        targets = {
+            "target_15m":
+                current_price - distance,
+
+            "target_30m":
+                current_price - distance * 1.5,
+
+            "target_1h":
+                current_price - distance * 2.0,
+
+            "target_2h":
+                current_price - distance * 2.75,
+        }
+
+    else:
+
+        midpoint = (
+            support
+            + resistance
+        ) / 2
+
+        targets = {
+            "target_15m":
+                current_price,
+
+            "target_30m":
+                current_price,
+
+            "target_1h":
+                current_price,
+
+            "target_2h":
+                current_price,
+        }
+
+    return targets
 
 
 # ============================================================
@@ -648,7 +893,6 @@ def github_headers():
         )
 
     return {
-
         "Authorization":
             f"Bearer {TOKEN}",
 
@@ -675,11 +919,6 @@ def github_get_history():
     )
 
     if response.status_code == 404:
-
-        print(
-            "No prediction history exists. "
-            "Creating a new file."
-        )
 
         return (
             pd.DataFrame(),
@@ -711,15 +950,11 @@ def github_save_history(
 
     csv_bytes = dataframe.to_csv(
         index=False
-    ).encode(
-        "utf-8"
-    )
+    ).encode("utf-8")
 
     encoded = base64.b64encode(
         csv_bytes
-    ).decode(
-        "utf-8"
-    )
+    ).decode("utf-8")
 
     url = (
         f"https://api.github.com/repos/"
@@ -728,7 +963,6 @@ def github_save_history(
     )
 
     payload = {
-
         "message":
             "Collect market data",
 
@@ -740,7 +974,6 @@ def github_save_history(
     }
 
     if sha is not None:
-
         payload["sha"] = sha
 
     response = requests.put(
@@ -776,7 +1009,7 @@ def main():
     )
 
     # --------------------------------------------------------
-    # Collect markets
+    # Collect live market data
     # --------------------------------------------------------
 
     gold = get_webull_gold()
@@ -786,13 +1019,62 @@ def main():
     dxy = get_dxy()
 
     # --------------------------------------------------------
-    # Load history
+    # Load existing collected history
     # --------------------------------------------------------
 
-    (
+    history, sha = github_get_history()
+
+    # --------------------------------------------------------
+    # Make sure gold history is usable
+    # --------------------------------------------------------
+
+    if not history.empty:
+
+        if "gold_price" in history.columns:
+
+            history["gold_price"] = pd.to_numeric(
+                history["gold_price"],
+                errors="coerce",
+            )
+
+    # --------------------------------------------------------
+    # Technical analysis from Webull history
+    # --------------------------------------------------------
+
+    technical = calculate_technical_analysis(
         history,
-        sha,
-    ) = github_get_history()
+        gold["gold_price"],
+    )
+
+    # --------------------------------------------------------
+    # Macro analysis
+    # --------------------------------------------------------
+
+    macro = calculate_macro(
+        dxy,
+        treasury,
+    )
+
+    # --------------------------------------------------------
+    # Overall signal
+    # --------------------------------------------------------
+
+    overall_bias, confidence = (
+        calculate_signal(
+            technical,
+            macro,
+        )
+    )
+
+    # --------------------------------------------------------
+    # Targets
+    # --------------------------------------------------------
+
+    targets = calculate_targets(
+        gold["gold_price"],
+        technical,
+        overall_bias,
+    )
 
     # --------------------------------------------------------
     # New record
@@ -810,9 +1092,7 @@ def main():
             gold["gold_pct"],
 
         "gold_retrieved_at_utc":
-            gold[
-                "gold_retrieved_at_utc"
-            ],
+            gold["gold_retrieved_at_utc"],
 
         "gold_source":
             gold["gold_source"],
@@ -824,14 +1104,10 @@ def main():
             gold["contract_name"],
 
         "treasury_yield":
-            treasury[
-                "treasury_yield"
-            ],
+            treasury["treasury_yield"],
 
         "treasury_date":
-            treasury[
-                "treasury_date"
-            ],
+            treasury["treasury_date"],
 
         "treasury_retrieved_at_utc":
             treasury[
@@ -851,6 +1127,56 @@ def main():
 
         "dxy_source":
             dxy["dxy_source"],
+
+        "technical_bias":
+            technical[
+                "technical_bias"
+            ],
+
+        "technical_score":
+            technical[
+                "technical_score"
+            ],
+
+        "support":
+            technical["support"],
+
+        "resistance":
+            technical["resistance"],
+
+        "ma20":
+            technical["ma20"],
+
+        "ma50":
+            technical["ma50"],
+
+        "macro_bias":
+            macro["macro_bias"],
+
+        "macro_confidence":
+            macro["macro_confidence"],
+
+        "overall_bias":
+            overall_bias,
+
+        "confidence":
+            confidence,
+
+        "target_15m":
+            targets["target_15m"],
+
+        "target_30m":
+            targets["target_30m"],
+
+        "target_1h":
+            targets["target_1h"],
+
+        "target_2h":
+            targets["target_2h"],
+
+        "data_quality":
+            "PASS",
+
     }
 
     new_row = pd.DataFrame(
@@ -858,7 +1184,7 @@ def main():
     )
 
     # --------------------------------------------------------
-    # Append to existing history
+    # Append history
     # --------------------------------------------------------
 
     if history.empty:
@@ -890,6 +1216,16 @@ def main():
             ],
             ignore_index=True,
         )
+
+    # --------------------------------------------------------
+    # Keep the history manageable
+    # --------------------------------------------------------
+
+    history = history.tail(
+        2000
+    ).reset_index(
+        drop=True
+    )
 
     # --------------------------------------------------------
     # Save
@@ -925,25 +1261,48 @@ def main():
     )
 
     print(
-        f"DXY: "
-        f"{dxy['dxy_price']:.3f}"
+        f"Technical: "
+        f"{technical['technical_bias']}"
     )
 
     print(
-        f"DXY %: "
-        f"{dxy['dxy_pct']:+.2f}%"
-        if dxy["dxy_pct"] is not None
-        else "DXY %: unavailable"
+        f"Technical score: "
+        f"{technical['technical_score']:.1f}"
     )
 
     print(
-        f"10Y Treasury: "
-        f"{treasury['treasury_yield']:.3f}%"
+        f"Support: "
+        f"${technical['support']:,.2f}"
     )
 
     print(
-        f"Treasury date: "
-        f"{treasury['treasury_date']}"
+        f"Resistance: "
+        f"${technical['resistance']:,.2f}"
+    )
+
+    print(
+        f"MA20: "
+        f"${technical['ma20']:,.2f}"
+    )
+
+    print(
+        f"MA50: "
+        f"${technical['ma50']:,.2f}"
+    )
+
+    print(
+        f"Macro: "
+        f"{macro['macro_bias']}"
+    )
+
+    print(
+        f"Overall: "
+        f"{overall_bias}"
+    )
+
+    print(
+        f"Confidence: "
+        f"{confidence}/10"
     )
 
     print(
