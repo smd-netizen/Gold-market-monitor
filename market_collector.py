@@ -3,7 +3,6 @@ import io
 import os
 import re
 from datetime import datetime, timezone
-from zoneinfo import ZoneInfo
 
 import pandas as pd
 import requests
@@ -18,9 +17,13 @@ REPO = os.getenv(
     "smd-netizen/gold-market-monitor",
 )
 
-TOKEN = os.getenv("GITHUB_TOKEN")
+TOKEN = os.getenv(
+    "GITHUB_TOKEN"
+)
 
-HISTORY_FILE = "prediction_history.csv"
+HISTORY_FILE = (
+    "prediction_history.csv"
+)
 
 WEBULL_URL = (
     "https://www.webull.com/quote/COMEX-1OZV6"
@@ -35,10 +38,8 @@ TREASURY_URL = (
 )
 
 DXY_URL = (
-    "https://www.marketwatch.com/investing/index/dxy"
+    "https://finance.yahoo.com/quote/DX-Y.NYB/"
 )
-
-ET = ZoneInfo("America/New_York")
 
 HEADERS = {
     "User-Agent": (
@@ -47,7 +48,8 @@ HEADERS = {
         "(KHTML, like Gecko) "
         "Chrome/139.0 Safari/537.36"
     ),
-    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Language":
+        "en-US,en;q=0.9",
 }
 
 
@@ -56,17 +58,19 @@ HEADERS = {
 # ============================================================
 
 def now_utc():
+
     return datetime.now(
         timezone.utc
     )
 
 
 def iso_utc():
+
     return now_utc().isoformat()
 
 
 # ============================================================
-# SAFE NUMBER PARSER
+# SAFE NUMBER
 # ============================================================
 
 def parse_number(value):
@@ -123,12 +127,14 @@ def get_webull_gold():
 
     price_patterns = [
 
-        r'"lastPrice"\s*:\s*"?(?:\$)?([0-9,]+\.[0-9]+)"?',
+        r'"lastPrice"\s*:\s*"?(?:\$)?'
+        r'([0-9,]+\.[0-9]+)"?',
 
-        r'"last"\s*:\s*"?(?:\$)?([0-9,]+\.[0-9]+)"?',
+        r'"last"\s*:\s*"?(?:\$)?'
+        r'([0-9,]+\.[0-9]+)"?',
 
-        r'"price"\s*:\s*"?(?:\$)?([0-9,]+\.[0-9]+)"?',
-
+        r'"price"\s*:\s*"?(?:\$)?'
+        r'([0-9,]+\.[0-9]+)"?',
     ]
 
     for pattern in price_patterns:
@@ -145,8 +151,9 @@ def get_webull_gold():
                 match
             )
 
-            if candidate is not None and (
-                3000 <= candidate <= 10000
+            if (
+                candidate is not None
+                and 3000 <= candidate <= 10000
             ):
 
                 price = candidate
@@ -171,12 +178,14 @@ def get_webull_gold():
 
     pct_patterns = [
 
-        r'"changePercent"\s*:\s*"?(?:\+)?(-?[0-9]+(?:\.[0-9]+)?)%?"?',
+        r'"changePercent"\s*:\s*"?(?:\+)?'
+        r'(-?[0-9]+(?:\.[0-9]+)?)%?"?',
 
-        r'"changePct"\s*:\s*"?(?:\+)?(-?[0-9]+(?:\.[0-9]+)?)%?"?',
+        r'"changePct"\s*:\s*"?(?:\+)?'
+        r'(-?[0-9]+(?:\.[0-9]+)?)%?"?',
 
-        r'"percentChange"\s*:\s*"?(?:\+)?(-?[0-9]+(?:\.[0-9]+)?)%?"?',
-
+        r'"percentChange"\s*:\s*"?(?:\+)?'
+        r'(-?[0-9]+(?:\.[0-9]+)?)%?"?',
     ]
 
     for pattern in pct_patterns:
@@ -193,13 +202,10 @@ def get_webull_gold():
                 match
             )
 
-            if candidate is None:
-                continue
-
-            # Avoid accidentally accepting
-            # an unrelated percentage.
-
-            if abs(candidate) <= 20:
+            if (
+                candidate is not None
+                and abs(candidate) <= 20
+            ):
 
                 gold_pct = candidate
                 break
@@ -208,42 +214,58 @@ def get_webull_gold():
             break
 
     # --------------------------------------------------------
-    # Fallback: locate percentage-looking
-    # values near Gold quote information.
+    # Additional Webull fallback
     # --------------------------------------------------------
 
     if gold_pct is None:
 
-        gold_section = re.search(
-            r"1OZV6.{0,30000}",
-            html,
-            re.IGNORECASE | re.DOTALL,
-        )
+        patterns = [
 
-        if gold_section:
+            r'"change"\s*:\s*"?(?:\+)?'
+            r'(-?[0-9]+(?:\.[0-9]+)?)"?',
 
-            section = (
-                gold_section.group(0)
+            r'"changeValue"\s*:\s*"?(?:\+)?'
+            r'(-?[0-9]+(?:\.[0-9]+)?)"?',
+        ]
+
+        for pattern in patterns:
+
+            matches = re.findall(
+                pattern,
+                html,
+                re.IGNORECASE,
             )
 
-            candidates = re.findall(
-                r"[-+]?[0-9]+(?:\.[0-9]+)?%",
-                section,
-            )
+            for match in matches:
 
-            for candidate in candidates:
-
-                value = parse_number(
-                    candidate
+                candidate = parse_number(
+                    match
                 )
 
                 if (
-                    value is not None
-                    and abs(value) <= 20
+                    candidate is not None
+                    and abs(candidate) <= 200
                 ):
 
-                    gold_pct = value
-                    break
+                    calculated_pct = (
+                        candidate
+                        / price
+                        * 100
+                    )
+
+                    if (
+                        abs(calculated_pct)
+                        <= 20
+                    ):
+
+                        gold_pct = (
+                            calculated_pct
+                        )
+
+                        break
+
+            if gold_pct is not None:
+                break
 
     retrieved = iso_utc()
 
@@ -265,14 +287,22 @@ def get_webull_gold():
         )
 
     return {
-        "gold_price": price,
-        "gold_pct": gold_pct,
+
+        "gold_price":
+            price,
+
+        "gold_pct":
+            gold_pct,
+
         "gold_retrieved_at_utc":
             retrieved,
+
         "gold_source":
             WEBULL_URL,
+
         "contract":
             "1OZV6.CMX",
+
         "contract_name":
             "1-Ounce Gold — October 2026",
     }
@@ -312,19 +342,19 @@ def get_treasury():
 
     for table in tables:
 
-        # Flatten MultiIndex columns.
-
         if isinstance(
             table.columns,
             pd.MultiIndex,
         ):
 
             table.columns = [
+
                 " ".join(
                     str(part)
                     for part in column
                     if str(part) != "nan"
                 ).strip()
+
                 for column in table.columns
             ]
 
@@ -338,16 +368,22 @@ def get_treasury():
 
         for column in columns:
 
+            clean = column.lower()
+
             if (
                 date_column is None
-                and column.lower() == "date"
+                and clean == "date"
             ):
 
                 date_column = column
 
             if (
                 ten_year_column is None
-                and "10 Yr" in column
+                and (
+                    "10 yr" in clean
+                    or "10-year" in clean
+                    or "10 year" in clean
+                )
             ):
 
                 ten_year_column = column
@@ -372,13 +408,13 @@ def get_treasury():
             "containing Date and 10 Yr."
         )
 
-    # Use the table containing the most
-    # recent valid date, rather than simply
-    # taking the last table returned.
-
     best = None
 
-    for table, date_col, yield_col in valid_tables:
+    for (
+        table,
+        date_col,
+        yield_col,
+    ) in valid_tables:
 
         dates = pd.to_datetime(
             table[date_col],
@@ -408,7 +444,12 @@ def get_treasury():
             "usable dates."
         )
 
-    _, table, date_col, yield_col = best
+    (
+        _,
+        table,
+        date_col,
+        yield_col,
+    ) = best
 
     table = table.copy()
 
@@ -428,10 +469,6 @@ def get_treasury():
             "_yield",
         ]
     )
-
-    # Only accept realistic 10Y yields.
-    # This also protects against accidentally
-    # reading another numeric column.
 
     table = table[
         (table["_yield"] >= 0)
@@ -473,6 +510,7 @@ def get_treasury():
     )
 
     return {
+
         "treasury_yield":
             yield_value,
 
@@ -485,7 +523,7 @@ def get_treasury():
 
 
 # ============================================================
-# DXY
+# DXY — YAHOO FINANCE
 # ============================================================
 
 def get_dxy():
@@ -496,7 +534,14 @@ def get_dxy():
 
     response = requests.get(
         DXY_URL,
-        headers=HEADERS,
+        headers={
+            **HEADERS,
+            "Accept":
+                "text/html,application/xhtml+xml,"
+                "application/xml;q=0.9,"
+                "image/avif,image/webp,"
+                "*/*;q=0.8",
+        },
         timeout=30,
     )
 
@@ -504,19 +549,28 @@ def get_dxy():
 
     html = response.text
 
+    print(
+        f"DXY response: "
+        f"{len(html):,} characters"
+    )
+
     dxy = None
     dxy_pct = None
 
-    # MarketWatch page patterns.
+    # --------------------------------------------------------
+    # Yahoo Finance price
+    # --------------------------------------------------------
 
     price_patterns = [
 
-        r'"value"\s*:\s*"?(9[0-9](?:\.[0-9]+)?)"?',
+        r'"regularMarketPrice":'
+        r'\{"raw":([0-9.]+)',
 
-        r'"last"\s*:\s*"?(9[0-9](?:\.[0-9]+)?)"?',
+        r'"regularMarketPrice":'
+        r'([0-9.]+)',
 
-        r'"price"\s*:\s*"?(9[0-9](?:\.[0-9]+)?)"?',
-
+        r'"price":'
+        r'\{"raw":([0-9.]+)',
     ]
 
     for pattern in price_patterns:
@@ -544,12 +598,17 @@ def get_dxy():
         if dxy is not None:
             break
 
+    # --------------------------------------------------------
+    # Yahoo Finance percentage
+    # --------------------------------------------------------
+
     pct_patterns = [
 
-        r'"changePercent"\s*:\s*"?(?:\+)?(-?[0-9]+(?:\.[0-9]+)?)%?"?',
+        r'"regularMarketChangePercent":'
+        r'\{"raw":(-?[0-9.]+)',
 
-        r'"percentChange"\s*:\s*"?(?:\+)?(-?[0-9]+(?:\.[0-9]+)?)%?"?',
-
+        r'"regularMarketChangePercent":'
+        r'(-?[0-9.]+)',
     ]
 
     for pattern in pct_patterns:
@@ -580,8 +639,9 @@ def get_dxy():
     if dxy is None:
 
         raise RuntimeError(
-            "DXY page responded, but the "
-            "DXY value could not be identified."
+            "Yahoo Finance responded, but "
+            "the DXY value could not be "
+            "identified."
         )
 
     retrieved = iso_utc()
@@ -604,6 +664,7 @@ def get_dxy():
         )
 
     return {
+
         "dxy_price":
             dxy,
 
@@ -631,6 +692,7 @@ def github_headers():
         )
 
     return {
+
         "Authorization":
             f"Bearer {TOKEN}",
 
@@ -660,7 +722,7 @@ def github_get_history():
 
         print(
             "No prediction history exists. "
-            "Creating a new one."
+            "Creating a new file."
         )
 
         return (
@@ -693,11 +755,15 @@ def github_save_history(
 
     csv_bytes = dataframe.to_csv(
         index=False
-    ).encode("utf-8")
+    ).encode(
+        "utf-8"
+    )
 
     encoded = base64.b64encode(
         csv_bytes
-    ).decode("utf-8")
+    ).decode(
+        "utf-8"
+    )
 
     url = (
         f"https://api.github.com/repos/"
@@ -706,6 +772,7 @@ def github_save_history(
     )
 
     payload = {
+
         "message":
             "Collect market data",
 
@@ -752,15 +819,28 @@ def main():
         "=========================================="
     )
 
+    # --------------------------------------------------------
+    # Collect all three markets
+    # --------------------------------------------------------
+
     gold = get_webull_gold()
 
     treasury = get_treasury()
 
     dxy = get_dxy()
 
-    history, sha = (
-        github_get_history()
-    )
+    # --------------------------------------------------------
+    # Load existing history
+    # --------------------------------------------------------
+
+    (
+        history,
+        sha,
+    ) = github_get_history()
+
+    # --------------------------------------------------------
+    # Build new record
+    # --------------------------------------------------------
 
     record = {
 
@@ -768,10 +848,14 @@ def main():
             iso_utc(),
 
         "gold_price":
-            gold["gold_price"],
+            gold[
+                "gold_price"
+            ],
 
         "gold_pct":
-            gold["gold_pct"],
+            gold[
+                "gold_pct"
+            ],
 
         "gold_retrieved_at_utc":
             gold[
@@ -779,19 +863,29 @@ def main():
             ],
 
         "gold_source":
-            gold["gold_source"],
+            gold[
+                "gold_source"
+            ],
 
         "contract":
-            gold["contract"],
+            gold[
+                "contract"
+            ],
 
         "contract_name":
-            gold["contract_name"],
+            gold[
+                "contract_name"
+            ],
 
         "dxy_price":
-            dxy["dxy_price"],
+            dxy[
+                "dxy_price"
+            ],
 
         "dxy_pct":
-            dxy["dxy_pct"],
+            dxy[
+                "dxy_pct"
+            ],
 
         "dxy_retrieved_at_utc":
             dxy[
@@ -799,7 +893,9 @@ def main():
             ],
 
         "dxy_source":
-            dxy["dxy_source"],
+            dxy[
+                "dxy_source"
+            ],
 
         "treasury_yield":
             treasury[
@@ -820,6 +916,10 @@ def main():
     new_row = pd.DataFrame(
         [record]
     )
+
+    # --------------------------------------------------------
+    # Append
+    # --------------------------------------------------------
 
     if history.empty:
 
@@ -851,10 +951,18 @@ def main():
             ignore_index=True,
         )
 
+    # --------------------------------------------------------
+    # Save
+    # --------------------------------------------------------
+
     github_save_history(
         history,
         sha,
     )
+
+    # --------------------------------------------------------
+    # Final report
+    # --------------------------------------------------------
 
     print(
         "=========================================="
@@ -865,27 +973,54 @@ def main():
     )
 
     print(
-        f"Gold: ${gold['gold_price']:,.2f}"
+        f"Gold: "
+        f"${gold['gold_price']:,.2f}"
+    )
+
+    if gold["gold_pct"] is not None:
+
+        print(
+            f"Gold %: "
+            f"{gold['gold_pct']:+.2f}%"
+        )
+
+    else:
+
+        print(
+            "Gold %: unavailable"
+        )
+
+    print(
+        f"DXY: "
+        f"{dxy['dxy_price']:.3f}"
+    )
+
+    if dxy["dxy_pct"] is not None:
+
+        print(
+            f"DXY %: "
+            f"{dxy['dxy_pct']:+.2f}%"
+        )
+
+    else:
+
+        print(
+            "DXY %: unavailable"
+        )
+
+    print(
+        f"10Y Treasury: "
+        f"{treasury['treasury_yield']:.3f}%"
     )
 
     print(
-        f"Gold %: {gold['gold_pct']}"
+        f"Treasury date: "
+        f"{treasury['treasury_date']}"
     )
 
     print(
-        f"DXY: {dxy['dxy_price']:.3f}"
-    )
-
-    print(
-        f"DXY %: {dxy['dxy_pct']}"
-    )
-
-    print(
-        f"10Y: {treasury['treasury_yield']:.3f}%"
-    )
-
-    print(
-        f"Rows: {len(history)}"
+        f"History rows: "
+        f"{len(history)}"
     )
 
     print(
@@ -894,4 +1029,5 @@ def main():
 
 
 if __name__ == "__main__":
+
     main()
