@@ -30,39 +30,47 @@ GITHUB_REPO = os.getenv(
 
 HISTORY_PATH = "prediction_history.csv"
 
-# Gold historical data is used for technical analysis.
-# Current Gold price still comes from the working collector/Webull feed.
 GOLD_YF_SYMBOL = "GC=F"
-
-DXY_YF_SYMBOL = "DX-Y.NYB"
 
 
 # ============================================================
-# GENERAL HELPERS
+# SAFE HELPERS
 # ============================================================
 
 def safe_float(value):
+
     try:
+
         if value is None or pd.isna(value):
             return None
+
         return float(value)
+
     except Exception:
+
         return None
 
 
 def safe_text(value, default="N/A"):
+
     try:
+
         if value is None or pd.isna(value):
             return default
+
     except Exception:
         pass
 
     text = str(value).strip()
 
-    return text if text else default
+    if not text:
+        return default
+
+    return text
 
 
 def money(value):
+
     value = safe_float(value)
 
     if value is None:
@@ -72,6 +80,7 @@ def money(value):
 
 
 def number(value, decimals=2):
+
     value = safe_float(value)
 
     if value is None:
@@ -81,6 +90,7 @@ def number(value, decimals=2):
 
 
 def percentage(value):
+
     value = safe_float(value)
 
     if value is None:
@@ -112,6 +122,7 @@ def parse_timestamp(value):
         return timestamp.to_pydatetime()
 
     except Exception:
+
         return None
 
 
@@ -122,7 +133,9 @@ def format_et(value):
     if timestamp is None:
         return "Unknown"
 
-    return timestamp.astimezone(ET).strftime(
+    return timestamp.astimezone(
+        ET
+    ).strftime(
         "%Y-%m-%d %I:%M:%S %p ET"
     )
 
@@ -134,7 +147,9 @@ def age_text(value):
     if timestamp is None:
         return "Unknown"
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(
+        timezone.utc
+    )
 
     seconds = max(
         0,
@@ -144,12 +159,15 @@ def age_text(value):
     )
 
     if seconds < 60:
+
         return f"{int(seconds)} sec ago"
 
     if seconds < 3600:
+
         return f"{int(seconds // 60)} min ago"
 
     if seconds < 86400:
+
         return f"{seconds / 3600:.1f} hr ago"
 
     return f"{seconds / 86400:.1f} days ago"
@@ -211,25 +229,25 @@ def load_csv_from_github():
         )
 
     except Exception:
+
         return pd.DataFrame()
 
 
 # ============================================================
-# LOAD MARKET DATA
+# LOAD COLLECTED MARKET DATA
 # ============================================================
 
 history = load_csv_from_github()
 
+
 if history.empty:
 
-    st.title("🥇 Gold Market Monitor")
+    st.title(
+        "🥇 Gold Market Monitor"
+    )
 
     st.error(
         "Market data could not be loaded from GitHub."
-    )
-
-    st.info(
-        "Run the GitHub market-data collector first."
     )
 
     st.stop()
@@ -240,20 +258,31 @@ if history.empty:
 # ============================================================
 
 timestamp_candidates = [
+
     "collected_at_utc",
+
     "timestamp_utc",
+
     "timestamp",
+
     "datetime",
+
     "date",
+
     "time",
+
 ]
 
+
 timestamp_column = None
+
 
 for column in timestamp_candidates:
 
     if column in history.columns:
+
         timestamp_column = column
+
         break
 
 
@@ -279,14 +308,18 @@ history["_timestamp"] = pd.to_datetime(
     utc=True,
 )
 
+
 history = history.dropna(
-    subset=["_timestamp"]
+    subset=[
+        "_timestamp"
+    ]
 )
+
 
 if history.empty:
 
     st.error(
-        "The market-data CSV contains no usable records."
+        "The CSV contains no usable records."
     )
 
     st.stop()
@@ -296,50 +329,77 @@ history = history.sort_values(
     "_timestamp"
 )
 
+
 latest = history.iloc[-1]
 
 
 # ============================================================
-# CURRENT MARKET VALUES
+# CURRENT MARKET DATA
 # ============================================================
 
 gold_price = safe_float(
-    latest.get("gold_price")
+    latest.get(
+        "gold_price"
+    )
 )
+
 
 gold_pct = safe_float(
-    latest.get("gold_pct")
+    latest.get(
+        "gold_pct"
+    )
 )
+
 
 dxy = safe_float(
-    latest.get("dxy_price")
+    latest.get(
+        "dxy_price"
+    )
 )
+
 
 dxy_pct = safe_float(
-    latest.get("dxy_pct")
+    latest.get(
+        "dxy_pct"
+    )
 )
+
 
 treasury = safe_float(
-    latest.get("treasury_yield")
+    latest.get(
+        "treasury_yield"
+    )
 )
 
+
 treasury_pct = safe_float(
-    latest.get("treasury_pct")
+    latest.get(
+        "treasury_pct"
+    )
 )
+
 
 gold_timestamp = latest.get(
     "gold_retrieved_at_utc",
-    latest.get("collected_at_utc"),
+    latest.get(
+        "collected_at_utc"
+    ),
 )
+
 
 dxy_timestamp = latest.get(
     "dxy_retrieved_at_utc",
-    latest.get("collected_at_utc"),
+    latest.get(
+        "collected_at_utc"
+    ),
 )
+
 
 treasury_timestamp = latest.get(
     "treasury_retrieved_at_utc",
-    latest.get("collected_at_utc"),
+    latest.get(
+        "collected_at_utc"
+    ),
 )
 
 
@@ -359,69 +419,81 @@ st.caption(
 
 
 # ============================================================
-# COMPACT MARKET PANEL
+# CURRENT MARKET
 # ============================================================
 
-st.subheader("Current Market")
+st.subheader(
+    "Current Market"
+)
 
 
-market = st.container()
+c1, c2, c3 = st.columns(3)
 
-with market:
 
-    c1, c2, c3 = st.columns(3)
+with c1:
 
-    with c1:
+    st.metric(
+        "🥇 Gold — October 2026",
+        money(
+            gold_price
+        ),
+        percentage(
+            gold_pct
+        ),
+    )
 
-        st.metric(
-            "🥇 Gold — October 2026",
-            money(gold_price),
-            percentage(gold_pct),
-        )
+    st.caption(
+        f"Updated {age_text(gold_timestamp)}"
+    )
 
-        st.caption(
-            f"Updated {age_text(gold_timestamp)}"
-        )
+    st.caption(
+        format_et(gold_timestamp)
+    )
 
-        st.caption(
-            format_et(gold_timestamp)
-        )
 
-    with c2:
+with c2:
 
-        st.metric(
-            "💵 DXY",
-            number(dxy, 3),
-            percentage(dxy_pct),
-        )
+    st.metric(
+        "💵 DXY",
+        number(
+            dxy,
+            3,
+        ),
+        percentage(
+            dxy_pct
+        ),
+    )
 
-        st.caption(
-            f"Updated {age_text(dxy_timestamp)}"
-        )
+    st.caption(
+        f"Updated {age_text(dxy_timestamp)}"
+    )
 
-        st.caption(
-            format_et(dxy_timestamp)
-        )
+    st.caption(
+        format_et(dxy_timestamp)
+    )
 
-    with c3:
 
-        st.metric(
-            "🇺🇸 10Y Treasury",
-            (
-                f"{treasury:.2f}%"
-                if treasury is not None
-                else "Unavailable"
-            ),
-            percentage(treasury_pct),
-        )
+with c3:
 
-        st.caption(
-            f"Updated {age_text(treasury_timestamp)}"
-        )
+    st.metric(
+        "🇺🇸 10Y Treasury",
+        (
+            f"{treasury:.2f}%"
+            if treasury is not None
+            else "Unavailable"
+        ),
+        percentage(
+            treasury_pct
+        ),
+    )
 
-        st.caption(
-            format_et(treasury_timestamp)
-        )
+    st.caption(
+        f"Updated {age_text(treasury_timestamp)}"
+    )
+
+    st.caption(
+        format_et(treasury_timestamp)
+    )
 
 
 # ============================================================
@@ -430,22 +502,44 @@ with market:
 
 quality_errors = []
 
+
 if gold_price is None:
-    quality_errors.append("Gold price unavailable")
+
+    quality_errors.append(
+        "Gold price unavailable"
+    )
+
 
 if gold_pct is None:
-    quality_errors.append("Gold percentage unavailable")
+
+    quality_errors.append(
+        "Gold percentage unavailable"
+    )
+
 
 if dxy is None:
-    quality_errors.append("DXY unavailable")
+
+    quality_errors.append(
+        "DXY unavailable"
+    )
+
 
 if dxy is not None and not 80 <= dxy <= 120:
-    quality_errors.append("DXY failed sanity check")
+
+    quality_errors.append(
+        "DXY failed sanity check"
+    )
+
 
 if treasury is None:
-    quality_errors.append("10Y Treasury unavailable")
+
+    quality_errors.append(
+        "10Y Treasury unavailable"
+    )
+
 
 if treasury is not None and not 0 <= treasury <= 15:
+
     quality_errors.append(
         "10Y Treasury failed sanity check"
     )
@@ -455,7 +549,9 @@ if quality_errors:
 
     st.warning(
         "🟡 Data quality warning: "
-        + "; ".join(quality_errors)
+        + "; ".join(
+            quality_errors
+        )
     )
 
 else:
@@ -475,33 +571,46 @@ with st.expander(
 ):
 
     contract = safe_text(
-        latest.get("contract"),
+        latest.get(
+            "contract"
+        ),
         "1OZV6.CMX",
     )
 
+
     contract_name = safe_text(
-        latest.get("contract_name"),
+        latest.get(
+            "contract_name"
+        ),
         "1-Ounce Gold — October 2026",
     )
 
+
     gold_source = safe_text(
-        latest.get("gold_source"),
+        latest.get(
+            "gold_source"
+        ),
         "Webull public page",
     )
 
+
     a, b, c = st.columns(3)
+
 
     a.write(
         f"**Contract:** {contract}"
     )
 
+
     b.write(
         f"**Contract Name:** {contract_name}"
     )
 
+
     c.write(
         "**Market:** COMEX"
     )
+
 
     st.write(
         f"**Gold Source:** {gold_source}"
@@ -509,7 +618,7 @@ with st.expander(
 
 
 # ============================================================
-# TECHNICAL DATA
+# TECHNICAL HISTORY
 # ============================================================
 
 @st.cache_data(ttl=300)
@@ -519,14 +628,17 @@ def get_gold_history():
 
         data = yf.download(
             GOLD_YF_SYMBOL,
-            period="5d",
-            interval="5m",
+            period="6mo",
+            interval="1d",
             progress=False,
             auto_adjust=False,
         )
 
+
         if data is None or data.empty:
+
             return pd.DataFrame()
+
 
         if isinstance(
             data.columns,
@@ -538,22 +650,28 @@ def get_gold_history():
                 for column in data.columns
             ]
 
+
         required = [
             "Close",
             "High",
             "Low",
         ]
 
+
         for column in required:
 
             if column not in data.columns:
+
                 return pd.DataFrame()
+
 
         data = data.dropna(
             subset=required
         )
 
+
         return data
+
 
     except Exception:
 
@@ -568,12 +686,18 @@ gold_history = get_gold_history()
 # ============================================================
 
 technical_bias = "N/A"
+
 technical_score = None
+
 support = None
+
 resistance = None
+
 ma20 = None
+
 ma50 = None
-last_technical_price = None
+
+historical_volatility = None
 
 
 if not gold_history.empty:
@@ -583,15 +707,20 @@ if not gold_history.empty:
         errors="coerce",
     ).dropna()
 
+
     high = pd.to_numeric(
         gold_history["High"],
         errors="coerce",
     ).dropna()
 
+
     low = pd.to_numeric(
         gold_history["Low"],
         errors="coerce",
     ).dropna()
+
+
+    # 20-period and 50-period daily moving averages.
 
     if len(close) >= 20:
 
@@ -599,13 +728,16 @@ if not gold_history.empty:
             close.tail(20).mean()
         )
 
+
         support = float(
             low.tail(20).min()
         )
 
+
         resistance = float(
             high.tail(20).max()
         )
+
 
     if len(close) >= 50:
 
@@ -613,25 +745,56 @@ if not gold_history.empty:
             close.tail(50).mean()
         )
 
-    last_technical_price = float(
-        close.iloc[-1]
+
+    # Daily volatility used only as a background
+    # estimate for the prediction engine.
+
+    returns = (
+        close
+        .pct_change()
+        .dropna()
     )
 
-    score = 0.0
 
-    if ma20 is not None:
+    if not returns.empty:
 
-        if last_technical_price > ma20:
+        historical_volatility = float(
+            returns.tail(30).std()
+        )
+
+
+    # Technical score.
+
+    score = 0
+
+
+    if (
+        gold_price is not None
+        and ma20 is not None
+    ):
+
+        if gold_price > ma20:
+
             score += 1
+
         else:
+
             score -= 1
 
-    if ma50 is not None:
 
-        if last_technical_price > ma50:
+    if (
+        gold_price is not None
+        and ma50 is not None
+    ):
+
+        if gold_price > ma50:
+
             score += 1
+
         else:
+
             score -= 1
+
 
     if (
         ma20 is not None
@@ -639,19 +802,28 @@ if not gold_history.empty:
     ):
 
         if ma20 > ma50:
+
             score += 1
+
         else:
+
             score -= 1
 
-    technical_score = score
+
+    technical_score = float(
+        score
+    )
+
 
     if score >= 2:
 
         technical_bias = "BULLISH"
 
+
     elif score <= -2:
 
         technical_bias = "BEARISH"
+
 
     else:
 
@@ -666,12 +838,15 @@ st.subheader(
     "📈 Technical Analysis"
 )
 
+
 tech = st.columns(5)
+
 
 tech[0].metric(
     "Technical Bias",
     technical_bias,
 )
+
 
 tech[1].metric(
     "Technical Score",
@@ -682,15 +857,22 @@ tech[1].metric(
     ),
 )
 
+
 tech[2].metric(
     "Support",
-    money(support),
+    money(
+        support
+    ),
 )
+
 
 tech[3].metric(
     "Resistance",
-    money(resistance),
+    money(
+        resistance
+    ),
 )
+
 
 tech[4].metric(
     "20 / 50 MA",
@@ -698,9 +880,20 @@ tech[4].metric(
         f"{money(ma20)} / {money(ma50)}"
         if ma20 is not None
         and ma50 is not None
-        else "N/A"
+        else (
+            f"{money(ma20)} / N/A"
+            if ma20 is not None
+            else "N/A"
+        )
     ),
 )
+
+
+if gold_history.empty:
+
+    st.caption(
+        "Technical history could not be retrieved."
+    )
 
 
 # ============================================================
@@ -711,15 +904,11 @@ st.subheader(
     "🌎 Macro Analysis"
 )
 
+
 macro_score = 0
 
 macro_reasons = []
 
-
-# DXY
-#
-# A weaker dollar is generally supportive of gold.
-# A stronger dollar is generally a headwind.
 
 if dxy_pct is not None:
 
@@ -731,6 +920,7 @@ if dxy_pct is not None:
             "DXY is falling"
         )
 
+
     elif dxy_pct > 0.10:
 
         macro_score -= 1
@@ -739,8 +929,6 @@ if dxy_pct is not None:
             "DXY is rising"
         )
 
-
-# Treasury
 
 if treasury_pct is not None:
 
@@ -751,6 +939,7 @@ if treasury_pct is not None:
         macro_reasons.append(
             "Treasury yield is falling"
         )
+
 
     elif treasury_pct > 0.10:
 
@@ -765,9 +954,11 @@ if macro_score >= 2:
 
     macro_bias = "BULLISH"
 
+
 elif macro_score <= -2:
 
     macro_bias = "BEARISH"
+
 
 else:
 
@@ -778,22 +969,27 @@ macro_confidence = min(
     10,
     max(
         1,
-        5 + abs(macro_score) * 2,
+        5 + abs(
+            macro_score
+        ) * 2,
     ),
 )
 
 
 macro_cols = st.columns(3)
 
+
 macro_cols[0].metric(
     "Macro Bias",
     macro_bias,
 )
 
+
 macro_cols[1].metric(
     "Macro Confidence",
     f"{macro_confidence}/10",
 )
+
 
 macro_cols[2].metric(
     "Treasury Yield",
@@ -808,12 +1004,14 @@ macro_cols[2].metric(
 if macro_reasons:
 
     st.caption(
-        " • ".join(macro_reasons)
+        " • ".join(
+            macro_reasons
+        )
     )
 
 
 # ============================================================
-# OVERALL PREDICTION
+# OVERALL SIGNAL
 # ============================================================
 
 overall_score = 0
@@ -822,15 +1020,19 @@ overall_score = 0
 if technical_score is not None:
 
     if technical_score > 0:
+
         overall_score += 2
 
+
     elif technical_score < 0:
+
         overall_score -= 2
 
 
 if macro_score > 0:
 
     overall_score += 1
+
 
 elif macro_score < 0:
 
@@ -841,9 +1043,11 @@ if overall_score >= 2:
 
     overall_bias = "BULLISH"
 
+
 elif overall_score <= -2:
 
     overall_bias = "BEARISH"
+
 
 else:
 
@@ -854,34 +1058,39 @@ confidence = min(
     10,
     max(
         1,
-        5 + abs(overall_score),
+        5 + abs(
+            overall_score
+        ),
     ),
 )
 
 
 # ============================================================
-# OVERALL SIGNAL
+# CURRENT SIGNAL
 # ============================================================
 
 st.subheader(
     "🎯 Current Signal"
 )
 
-signal_col1, signal_col2 = st.columns(2)
 
-signal_col1.metric(
+signal_a, signal_b = st.columns(2)
+
+
+signal_a.metric(
     "Overall Bias",
     overall_bias,
 )
 
-signal_col2.metric(
+
+signal_b.metric(
     "Confidence",
     f"{confidence}/10",
 )
 
 
 # ============================================================
-# PRICE PREDICTIONS
+# PREDICTION TARGETS
 # ============================================================
 
 st.subheader(
@@ -889,55 +1098,35 @@ st.subheader(
 )
 
 
-prediction_base = (
-    gold_price
-    if gold_price is not None
-    else last_technical_price
+prediction_base = gold_price
+
+
+# Use daily volatility only as a fallback model input.
+# Short-term estimates are intentionally conservative.
+
+if (
+    historical_volatility is None
+    or historical_volatility <= 0
+):
+
+    historical_volatility = 0.005
+
+
+# Scale daily volatility down for short-term estimates.
+
+short_term_volatility = (
+    historical_volatility
+    / 6
 )
-
-
-# Approximate short-term movement based on:
-# - current technical direction
-# - recent 5-minute volatility
-#
-# These are model estimates, NOT guaranteed prices.
-
-volatility = 0.0
-
-
-if not gold_history.empty:
-
-    close = pd.to_numeric(
-        gold_history["Close"],
-        errors="coerce",
-    ).dropna()
-
-    if len(close) >= 10:
-
-        returns = (
-            close
-            .pct_change()
-            .dropna()
-            .tail(50)
-        )
-
-        if not returns.empty:
-
-            volatility = float(
-                returns.std()
-            )
-
-
-if volatility <= 0:
-
-    volatility = 0.00035
 
 
 direction = 0
 
+
 if overall_bias == "BULLISH":
 
     direction = 1
+
 
 elif overall_bias == "BEARISH":
 
@@ -947,49 +1136,82 @@ elif overall_bias == "BEARISH":
 def predicted_price(minutes):
 
     if prediction_base is None:
+
         return None
 
-    steps = minutes / 5
 
-    expected_move = (
+    # Square-root-of-time scaling.
+
+    scale = (
+        minutes / 15
+    ) ** 0.5
+
+
+    move = (
         direction
-        * volatility
-        * (steps ** 0.5)
-        * 0.75
+        * short_term_volatility
+        * scale
+        * 0.35
     )
+
 
     return (
         prediction_base
-        * (1 + expected_move)
+        * (
+            1 + move
+        )
     )
 
 
-target_15 = predicted_price(15)
-target_30 = predicted_price(30)
-target_60 = predicted_price(60)
-target_120 = predicted_price(120)
+target_15 = predicted_price(
+    15
+)
+
+target_30 = predicted_price(
+    30
+)
+
+target_60 = predicted_price(
+    60
+)
+
+target_120 = predicted_price(
+    120
+)
 
 
 targets = st.columns(4)
 
+
 targets[0].metric(
     "15 Minutes",
-    money(target_15),
+    money(
+        target_15
+    ),
 )
+
 
 targets[1].metric(
     "30 Minutes",
-    money(target_30),
+    money(
+        target_30
+    ),
 )
+
 
 targets[2].metric(
     "1 Hour",
-    money(target_60),
+    money(
+        target_60
+    ),
 )
+
 
 targets[3].metric(
     "2 Hours",
-    money(target_120),
+    money(
+        target_120
+    ),
 )
 
 
@@ -1008,6 +1230,7 @@ if overall_bias == "BULLISH":
         "BULLISH — confirmation required"
     )
 
+
     st.write(
         "The technical and macro picture currently "
         "leans bullish. This is not an automatic "
@@ -1016,10 +1239,12 @@ if overall_bias == "BULLISH":
         "highs before considering a long setup."
     )
 
+
     if resistance is not None:
 
         st.caption(
-            f"Watch resistance near {money(resistance)}."
+            f"Watch resistance near "
+            f"{money(resistance)}."
         )
 
 
@@ -1029,6 +1254,7 @@ elif overall_bias == "BEARISH":
         "BEARISH — confirmation required"
     )
 
+
     st.write(
         "The technical and macro picture currently "
         "leans bearish. Ideally, price should fail "
@@ -1036,10 +1262,12 @@ elif overall_bias == "BEARISH":
         "lower highs before considering a short setup."
     )
 
+
     if support is not None:
 
         st.caption(
-            f"Watch support near {money(support)}."
+            f"Watch support near "
+            f"{money(support)}."
         )
 
 
@@ -1048,6 +1276,7 @@ else:
     st.warning(
         "NEUTRAL / WAIT"
     )
+
 
     st.write(
         "The indicators are mixed. This is generally "
@@ -1068,27 +1297,98 @@ st.subheader(
 RSS_FEEDS = [
 
     (
-        "Reuters Business",
-        "https://feeds.reuters.com/reuters/businessNews",
-    ),
-
-    (
-        "Kitco Gold",
-        "https://www.kitco.com/rss/news.xml",
-    ),
-
-    (
         "Google News — Gold",
         "https://news.google.com/rss/search?"
-        "q=gold+price+when:1d&hl=en-US&gl=US&ceid=US:en",
+        "q=gold+price+when:1d"
+        "&hl=en-US"
+        "&gl=US"
+        "&ceid=US:en",
+    ),
+
+    (
+        "Google News — Federal Reserve",
+        "https://news.google.com/rss/search?"
+        "q=Federal+Reserve+gold+when:1d"
+        "&hl=en-US"
+        "&gl=US"
+        "&ceid=US:en",
+    ),
+
+    (
+        "Google News — Treasury",
+        "https://news.google.com/rss/search?"
+        "q=US+Treasury+yields+gold+when:1d"
+        "&hl=en-US"
+        "&gl=US"
+        "&ceid=US:en",
     ),
 
 ]
 
 
+def rss_time_to_et(entry):
+
+    try:
+
+        parsed = entry.get(
+            "published_parsed"
+        )
+
+
+        if parsed is not None:
+
+            utc_dt = datetime(
+                parsed.tm_year,
+                parsed.tm_mon,
+                parsed.tm_mday,
+                parsed.tm_hour,
+                parsed.tm_min,
+                parsed.tm_sec,
+                tzinfo=timezone.utc,
+            )
+
+
+            return utc_dt.astimezone(
+                ET
+            ).strftime(
+                "%b %d, %Y %I:%M %p ET"
+            )
+
+
+        published = entry.get(
+            "published"
+        )
+
+
+        if published:
+
+            timestamp = pd.to_datetime(
+                published,
+                utc=True,
+                errors="coerce",
+            )
+
+
+            if not pd.isna(timestamp):
+
+                return timestamp.to_pydatetime() \
+                    .astimezone(ET) \
+                    .strftime(
+                        "%b %d, %Y %I:%M %p ET"
+                    )
+
+
+    except Exception:
+        pass
+
+
+    return "Time unavailable"
+
+
 def get_news():
 
     articles = []
+
 
     for source, url in RSS_FEEDS:
 
@@ -1098,7 +1398,8 @@ def get_news():
                 url
             )
 
-            for entry in feed.entries[:10]:
+
+            for entry in feed.entries[:12]:
 
                 title = safe_text(
                     entry.get(
@@ -1107,6 +1408,7 @@ def get_news():
                     "",
                 )
 
+
                 link = safe_text(
                     entry.get(
                         "link"
@@ -1114,17 +1416,13 @@ def get_news():
                     "",
                 )
 
-                published = safe_text(
-                    entry.get(
-                        "published",
-                    ),
-                    "",
-                )
 
                 if not title or not link:
                     continue
 
+
                 title_lower = title.lower()
+
 
                 relevant_terms = [
 
@@ -1146,26 +1444,38 @@ def get_news():
 
                 ]
 
+
                 if not any(
                     term in title_lower
                     for term in relevant_terms
                 ):
+
                     continue
+
 
                 articles.append({
 
-                    "title": title,
+                    "title":
+                        title,
 
-                    "link": link,
+                    "link":
+                        link,
 
-                    "source": source,
+                    "source":
+                        source,
 
-                    "published": published,
+                    "time":
+                        rss_time_to_et(
+                            entry
+                        ),
 
                 })
 
+
         except Exception:
+
             continue
+
 
     return articles
 
@@ -1177,34 +1487,46 @@ if news:
 
     seen = set()
 
-    count = 0
+    displayed = 0
+
 
     for article in news:
 
         title = article["title"]
 
+
         if title in seen:
             continue
 
-        seen.add(title)
+
+        seen.add(
+            title
+        )
+
 
         st.markdown(
             f"**{title}**"
         )
 
+
         st.caption(
             f"{article['source']} "
-            f"• {article['published']}"
+            f"• {article['time']}"
         )
+
 
         st.markdown(
             f"[Read article]({article['link']})"
         )
 
-        count += 1
 
-        if count >= 8:
+        displayed += 1
+
+
+        if displayed >= 8:
+
             break
+
 
 else:
 
@@ -1222,29 +1544,41 @@ st.subheader(
 )
 
 
-result_columns = [
-    "result_15m",
-    "result_30m",
-    "result_1h",
-    "result_2h",
-]
-
-
 performance_rows = []
 
 
-for result_column in result_columns:
+for period in [
+
+    "15m",
+
+    "30m",
+
+    "1h",
+
+    "2h",
+
+]:
+
+    result_column = (
+        f"result_{period}"
+    )
+
 
     if result_column not in history.columns:
+
         continue
 
+
     values = (
-        history[result_column]
+        history[
+            result_column
+        ]
         .dropna()
         .astype(str)
         .str.upper()
         .str.strip()
     )
+
 
     correct = values.isin(
         [
@@ -1255,6 +1589,7 @@ for result_column in result_columns:
         ]
     ).sum()
 
+
     incorrect = values.isin(
         [
             "INCORRECT",
@@ -1264,10 +1599,17 @@ for result_column in result_columns:
         ]
     ).sum()
 
-    total = correct + incorrect
+
+    total = (
+        correct
+        + incorrect
+    )
+
 
     if total == 0:
+
         continue
+
 
     accuracy = (
         correct
@@ -1275,13 +1617,11 @@ for result_column in result_columns:
         * 100
     )
 
+
     performance_rows.append({
 
         "Time Horizon":
-            result_column.replace(
-                "result_",
-                "",
-            ),
+            period,
 
         "Correct":
             int(correct),
@@ -1305,6 +1645,7 @@ if performance_rows:
         hide_index=True,
     )
 
+
 else:
 
     st.info(
@@ -1315,7 +1656,7 @@ else:
 
 
 # ============================================================
-# RAW COLLECTION HISTORY
+# MARKET COLLECTION HISTORY
 # ============================================================
 
 with st.expander(
@@ -1325,35 +1666,53 @@ with st.expander(
 
     display_history = history.copy()
 
+
     if "_timestamp" in display_history.columns:
 
-        display_history = display_history.drop(
-            columns=[
-                "_timestamp"
-            ]
+        display_history = (
+            display_history.drop(
+                columns=[
+                    "_timestamp"
+                ]
+            )
         )
+
 
     timestamp_columns = [
 
         "collected_at_utc",
+
         "timestamp_utc",
+
         "timestamp",
+
         "datetime",
+
         "date",
+
         "time",
+
         "created_at",
+
         "prediction_time",
+
         "recorded_at",
+
         "gold_retrieved_at_utc",
+
         "dxy_retrieved_at_utc",
+
         "treasury_retrieved_at_utc",
 
     ]
 
+
     for column in timestamp_columns:
 
         if column not in display_history.columns:
+
             continue
+
 
         parsed = pd.to_datetime(
             display_history[column],
@@ -1361,21 +1720,25 @@ with st.expander(
             utc=True,
         )
 
+
         formatted = (
             parsed
-            .dt.tz_convert(ET)
+            .dt.tz_convert(
+                ET
+            )
             .dt.strftime(
                 "%Y-%m-%d %I:%M:%S %p ET"
             )
         )
+
 
         display_history[column] = (
             formatted.fillna("")
         )
 
 
-    # Convert every remaining object column to
-    # ordinary strings. This prevents PyArrow errors.
+    # Convert object columns to plain strings
+    # to avoid PyArrow conversion problems.
 
     for column in display_history.columns:
 
@@ -1395,7 +1758,9 @@ with st.expander(
     display_history = (
         display_history
         .head(100)
-        .reset_index(drop=True)
+        .reset_index(
+            drop=True
+        )
     )
 
 
@@ -1412,9 +1777,11 @@ with st.expander(
 
 st.divider()
 
+
 st.caption(
     "Gold Market Monitor"
 )
+
 
 st.caption(
     "Dashboard viewed: "
