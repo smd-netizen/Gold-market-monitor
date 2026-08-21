@@ -21,9 +21,7 @@ TOKEN = os.getenv(
     "GITHUB_TOKEN"
 )
 
-HISTORY_FILE = (
-    "prediction_history.csv"
-)
+HISTORY_FILE = "prediction_history.csv"
 
 WEBULL_URL = (
     "https://www.webull.com/quote/COMEX-1OZV6"
@@ -58,14 +56,10 @@ HEADERS = {
 # ============================================================
 
 def now_utc():
-
-    return datetime.now(
-        timezone.utc
-    )
+    return datetime.now(timezone.utc)
 
 
 def iso_utc():
-
     return now_utc().isoformat()
 
 
@@ -119,10 +113,6 @@ def get_webull_gold():
         f"{len(html):,} characters"
     )
 
-    # --------------------------------------------------------
-    # Gold price
-    # --------------------------------------------------------
-
     price = None
 
     price_patterns = [
@@ -147,9 +137,7 @@ def get_webull_gold():
 
         for match in matches:
 
-            candidate = parse_number(
-                match
-            )
+            candidate = parse_number(match)
 
             if (
                 candidate is not None
@@ -169,10 +157,6 @@ def get_webull_gold():
             "the Gold price could not be "
             "identified."
         )
-
-    # --------------------------------------------------------
-    # Gold percentage change
-    # --------------------------------------------------------
 
     gold_pct = None
 
@@ -198,9 +182,7 @@ def get_webull_gold():
 
         for match in matches:
 
-            candidate = parse_number(
-                match
-            )
+            candidate = parse_number(match)
 
             if (
                 candidate is not None
@@ -212,10 +194,6 @@ def get_webull_gold():
 
         if gold_pct is not None:
             break
-
-    # --------------------------------------------------------
-    # Additional Webull fallback
-    # --------------------------------------------------------
 
     if gold_pct is None:
 
@@ -238,9 +216,7 @@ def get_webull_gold():
 
             for match in matches:
 
-                candidate = parse_number(
-                    match
-                )
+                candidate = parse_number(match)
 
                 if (
                     candidate is not None
@@ -248,20 +224,12 @@ def get_webull_gold():
                 ):
 
                     calculated_pct = (
-                        candidate
-                        / price
-                        * 100
+                        candidate / price * 100
                     )
 
-                    if (
-                        abs(calculated_pct)
-                        <= 20
-                    ):
+                    if abs(calculated_pct) <= 20:
 
-                        gold_pct = (
-                            calculated_pct
-                        )
-
+                        gold_pct = calculated_pct
                         break
 
             if gold_pct is not None:
@@ -288,11 +256,9 @@ def get_webull_gold():
 
     return {
 
-        "gold_price":
-            price,
+        "gold_price": price,
 
-        "gold_pct":
-            gold_pct,
+        "gold_pct": gold_pct,
 
         "gold_retrieved_at_utc":
             retrieved,
@@ -327,9 +293,7 @@ def get_treasury():
     response.raise_for_status()
 
     tables = pd.read_html(
-        io.StringIO(
-            response.text
-        )
+        io.StringIO(response.text)
     )
 
     if not tables:
@@ -523,7 +487,7 @@ def get_treasury():
 
 
 # ============================================================
-# DXY — YAHOO FINANCE
+# DXY
 # ============================================================
 
 def get_dxy():
@@ -532,116 +496,108 @@ def get_dxy():
         "Requesting DXY data..."
     )
 
+    # --------------------------------------------------------
+    # Use Yahoo's quote API rather than parsing arbitrary
+    # numbers from the HTML page.
+    # --------------------------------------------------------
+
+    quote_url = (
+        "https://query1.finance.yahoo.com/"
+        "v8/finance/chart/DX-Y.NYB"
+        "?range=1d&interval=1m"
+    )
+
     response = requests.get(
-        DXY_URL,
-        headers={
-            **HEADERS,
-            "Accept":
-                "text/html,application/xhtml+xml,"
-                "application/xml;q=0.9,"
-                "image/avif,image/webp,"
-                "*/*;q=0.8",
-        },
+        quote_url,
+        headers=HEADERS,
         timeout=30,
     )
 
     response.raise_for_status()
 
-    html = response.text
+    data = response.json()
 
-    print(
-        f"DXY response: "
-        f"{len(html):,} characters"
+    chart = data.get(
+        "chart",
+        {}
     )
 
-    dxy = None
-    dxy_pct = None
+    results = chart.get(
+        "result"
+    )
 
-    # --------------------------------------------------------
-    # Yahoo Finance price
-    # --------------------------------------------------------
+    if not results:
 
-    price_patterns = [
-
-        r'"regularMarketPrice":'
-        r'\{"raw":([0-9.]+)',
-
-        r'"regularMarketPrice":'
-        r'([0-9.]+)',
-
-        r'"price":'
-        r'\{"raw":([0-9.]+)',
-    ]
-
-    for pattern in price_patterns:
-
-        matches = re.findall(
-            pattern,
-            html,
-            re.IGNORECASE,
+        raise RuntimeError(
+            "Yahoo Finance returned no DXY "
+            "chart data."
         )
 
-        for match in matches:
+    result = results[0]
 
-            candidate = parse_number(
-                match
-            )
-
-            if (
-                candidate is not None
-                and 80 <= candidate <= 120
-            ):
-
-                dxy = candidate
-                break
-
-        if dxy is not None:
-            break
+    meta = result.get(
+        "meta",
+        {}
+    )
 
     # --------------------------------------------------------
-    # Yahoo Finance percentage
+    # Current DXY
     # --------------------------------------------------------
 
-    pct_patterns = [
-
-        r'"regularMarketChangePercent":'
-        r'\{"raw":(-?[0-9.]+)',
-
-        r'"regularMarketChangePercent":'
-        r'(-?[0-9.]+)',
-    ]
-
-    for pattern in pct_patterns:
-
-        matches = re.findall(
-            pattern,
-            html,
-            re.IGNORECASE,
+    dxy = parse_number(
+        meta.get(
+            "regularMarketPrice"
         )
+    )
 
-        for match in matches:
+    # --------------------------------------------------------
+    # Previous close
+    # --------------------------------------------------------
 
-            candidate = parse_number(
-                match
-            )
-
-            if (
-                candidate is not None
-                and abs(candidate) <= 10
-            ):
-
-                dxy_pct = candidate
-                break
-
-        if dxy_pct is not None:
-            break
+    previous_close = parse_number(
+        meta.get(
+            "previousClose"
+        )
+    )
 
     if dxy is None:
 
         raise RuntimeError(
-            "Yahoo Finance responded, but "
-            "the DXY value could not be "
-            "identified."
+            "Yahoo Finance returned DXY data "
+            "but no current price."
+        )
+
+    # --------------------------------------------------------
+    # Calculate percentage ourselves.
+    #
+    # This prevents us from accidentally grabbing
+    # an unrelated percentage from the webpage.
+    # --------------------------------------------------------
+
+    dxy_pct = None
+
+    if (
+        previous_close is not None
+        and previous_close != 0
+    ):
+
+        dxy_pct = (
+            (dxy - previous_close)
+            / previous_close
+            * 100
+        )
+
+    # --------------------------------------------------------
+    # Sanity check
+    # --------------------------------------------------------
+
+    if not (
+        80 <= dxy <= 120
+    ):
+
+        raise RuntimeError(
+            f"DXY value failed sanity check: "
+            f"{dxy}"
         )
 
     retrieved = iso_utc()
@@ -675,7 +631,7 @@ def get_dxy():
             retrieved,
 
         "dxy_source":
-            DXY_URL,
+            quote_url,
     }
 
 
@@ -820,7 +776,7 @@ def main():
     )
 
     # --------------------------------------------------------
-    # Collect all three markets
+    # Collect markets
     # --------------------------------------------------------
 
     gold = get_webull_gold()
@@ -830,7 +786,7 @@ def main():
     dxy = get_dxy()
 
     # --------------------------------------------------------
-    # Load existing history
+    # Load history
     # --------------------------------------------------------
 
     (
@@ -839,7 +795,7 @@ def main():
     ) = github_get_history()
 
     # --------------------------------------------------------
-    # Build new record
+    # New record
     # --------------------------------------------------------
 
     record = {
@@ -848,14 +804,10 @@ def main():
             iso_utc(),
 
         "gold_price":
-            gold[
-                "gold_price"
-            ],
+            gold["gold_price"],
 
         "gold_pct":
-            gold[
-                "gold_pct"
-            ],
+            gold["gold_pct"],
 
         "gold_retrieved_at_utc":
             gold[
@@ -863,39 +815,13 @@ def main():
             ],
 
         "gold_source":
-            gold[
-                "gold_source"
-            ],
+            gold["gold_source"],
 
         "contract":
-            gold[
-                "contract"
-            ],
+            gold["contract"],
 
         "contract_name":
-            gold[
-                "contract_name"
-            ],
-
-        "dxy_price":
-            dxy[
-                "dxy_price"
-            ],
-
-        "dxy_pct":
-            dxy[
-                "dxy_pct"
-            ],
-
-        "dxy_retrieved_at_utc":
-            dxy[
-                "dxy_retrieved_at_utc"
-            ],
-
-        "dxy_source":
-            dxy[
-                "dxy_source"
-            ],
+            gold["contract_name"],
 
         "treasury_yield":
             treasury[
@@ -911,6 +837,20 @@ def main():
             treasury[
                 "treasury_retrieved_at_utc"
             ],
+
+        "dxy_price":
+            dxy["dxy_price"],
+
+        "dxy_pct":
+            dxy["dxy_pct"],
+
+        "dxy_retrieved_at_utc":
+            dxy[
+                "dxy_retrieved_at_utc"
+            ],
+
+        "dxy_source":
+            dxy["dxy_source"],
     }
 
     new_row = pd.DataFrame(
@@ -918,7 +858,7 @@ def main():
     )
 
     # --------------------------------------------------------
-    # Append
+    # Append to existing history
     # --------------------------------------------------------
 
     if history.empty:
@@ -961,7 +901,7 @@ def main():
     )
 
     # --------------------------------------------------------
-    # Final report
+    # Final output
     # --------------------------------------------------------
 
     print(
@@ -977,36 +917,24 @@ def main():
         f"${gold['gold_price']:,.2f}"
     )
 
-    if gold["gold_pct"] is not None:
-
-        print(
-            f"Gold %: "
-            f"{gold['gold_pct']:+.2f}%"
-        )
-
-    else:
-
-        print(
-            "Gold %: unavailable"
-        )
+    print(
+        f"Gold %: "
+        f"{gold['gold_pct']:+.2f}%"
+        if gold["gold_pct"] is not None
+        else "Gold %: unavailable"
+    )
 
     print(
         f"DXY: "
         f"{dxy['dxy_price']:.3f}"
     )
 
-    if dxy["dxy_pct"] is not None:
-
-        print(
-            f"DXY %: "
-            f"{dxy['dxy_pct']:+.2f}%"
-        )
-
-    else:
-
-        print(
-            "DXY %: unavailable"
-        )
+    print(
+        f"DXY %: "
+        f"{dxy['dxy_pct']:+.2f}%"
+        if dxy["dxy_pct"] is not None
+        else "DXY %: unavailable"
+    )
 
     print(
         f"10Y Treasury: "
@@ -1029,5 +957,4 @@ def main():
 
 
 if __name__ == "__main__":
-
     main()
