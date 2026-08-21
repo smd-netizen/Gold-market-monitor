@@ -1,612 +1,36 @@
 import base64
 import io
 import os
-import re
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
-import feedparser
 import pandas as pd
 import requests
-import yfinance as yf
+import streamlit as st
 
-from bs4 import BeautifulSoup
 
+# =========================================================
+# CONFIGURATION
+# =========================================================
+
+st.set_page_config(
+    page_title="Gold Market Monitor",
+    page_icon="🥇",
+    layout="wide",
+)
 
 ET = ZoneInfo("America/New_York")
 
-WEBULL_URL = (
-    "https://www.webull.com/quote/COMEX-1OZV6"
-)
-
-REPO = os.getenv(
+GITHUB_REPO = os.getenv(
     "GITHUB_REPO",
-    "smd-netizen/gold-market-monitor"
+    "smd-netizen/gold-market-monitor",
 )
 
 HISTORY_PATH = "prediction_history.csv"
 
-HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 "
-        "(Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 "
-        "(KHTML, like Gecko) "
-        "Chrome/139.0 Safari/537.36"
-    )
-}
-
-
-def now_utc():
-
-    return datetime.now(
-        timezone.utc
-    )
-
 
 # =========================================================
-# GOLD
-# =========================================================
-
-def get_gold():
-
-    retrieved = now_utc()
-
-    response = requests.get(
-        WEBULL_URL,
-        headers=HEADERS,
-        timeout=20,
-    )
-
-    response.raise_for_status()
-
-    soup = BeautifulSoup(
-        response.text,
-        "html.parser",
-    )
-
-    text = soup.get_text(
-        " ",
-        strip=True,
-    )
-
-    # Make absolutely sure we are looking at
-    # the intended contract.
-
-    required = [
-        "1OZV6",
-        "1-Ounce Gold OCT 26",
-        "COMEX",
-    ]
-
-    for item in required:
-
-        if item not in text:
-
-            raise RuntimeError(
-                f"Expected contract information "
-                f"not found: {item}"
-            )
-
-
-    # Current public-page quote format.
-
-    pattern = (
-        r"1-Ounce Gold OCT 26\s+"
-        r"COMEX\s+"
-        r"([\d,]+\.\d{2})\s+"
-        r"([+-]?[\d,]+\.\d{2})\s+"
-        r"([+-]?[\d,]+\.\d{2})%"
-    )
-
-    match = re.search(
-        pattern,
-        text,
-    )
-
-    if not match:
-
-        raise RuntimeError(
-            "Could not parse the Webull "
-            "1OZV6 quote."
-        )
-
-
-    price = float(
-        match.group(1).replace(",", "")
-    )
-
-    change = float(
-        match.group(2).replace(",", "")
-    )
-
-    pct = float(
-        match.group(3)
-    )
-
-
-    def extract_number(label):
-
-        result = re.search(
-            label
-            + r"\s+([\d,]+\.\d{2})",
-            text,
-        )
-
-        if not result:
-
-            return None
-
-        return float(
-            result.group(1)
-            .replace(",", "")
-        )
-
-
-    high = extract_number(
-        "HIGH"
-    )
-
-    low = extract_number(
-        "LOW"
-    )
-
-    previous_settlement = extract_number(
-        "PREV SETTLE"
-    )
-
-
-    return {
-
-        "price": price,
-
-        "change": change,
-
-        "pct": pct,
-
-        "high": high,
-
-        "low": low,
-
-        "previous_settlement":
-            previous_settlement,
-
-        "retrieved_at_utc":
-            retrieved.isoformat(),
-
-    }
-
-
-# =========================================================
-# DXY
-# =========================================================
-
-def get_dxy():
-
-    retrieved = now_utc()
-
-    ticker = yf.Ticker(
-        "DX-Y.NYB"
-    )
-
-    data = ticker.history(
-        period="2d",
-        interval="5m",
-        auto_adjust=False,
-        prepost=True,
-    )
-
-    if data.empty:
-
-        raise RuntimeError(
-            "No DXY data returned."
-        )
-
-
-    close = (
-        pd.to_numeric(
-            data["Close"],
-            errors="coerce",
-        )
-        .dropna()
-    )
-
-    if close.empty:
-
-        raise RuntimeError(
-            "No valid DXY values."
-        )
-
-
-    price = float(
-        close.iloc[-1]
-    )
-
-
-    local_index = (
-        pd.to_datetime(
-            close.index,
-            utc=True,
-        )
-        .tz_convert(ET)
-    )
-
-
-    today = close[
-        local_index.date
-        == retrieved
-        .astimezone(ET)
-        .date()
-    ]
-
-
-    if len(today) > 0:
-
-        opening_value = float(
-            today.iloc[0]
-        )
-
-    else:
-
-        opening_value = price
-
-
-    if opening_value != 0:
-
-        percentage = (
-            (price / opening_value)
-            - 1
-        ) * 100
-
-    else:
-
-        percentage = 0
-
-
-    return {
-
-        "price": price,
-
-        "pct": percentage,
-
-        "retrieved_at_utc":
-            retrieved.isoformat(),
-
-    }
-
-
-# =========================================================
-# 10-YEAR TREASURY
-# =========================================================
-
-def get_ten_year():
-
-    retrieved = now_utc()
-
-    url = (
-        "https://fred.stlouisfed.org/"
-        "graph/fredgraph.csv?id=DGS10"
-    )
-
-    data = pd.read_csv(
-        url
-    )
-
-    data["DGS10"] = pd.to_numeric(
-        data["DGS10"],
-        errors="coerce",
-    )
-
-    data = data.dropna(
-        subset=["DGS10"]
-    )
-
-    if data.empty:
-
-        raise RuntimeError(
-            "No 10Y Treasury data."
-        )
-
-
-    latest = data.iloc[-1]
-
-
-    return {
-
-        "value":
-            float(latest["DGS10"]),
-
-        "date":
-            str(latest["DATE"]),
-
-        "retrieved_at_utc":
-            retrieved.isoformat(),
-
-    }
-
-
-# =========================================================
-# NEWS
-# =========================================================
-
-def get_news():
-
-    url = (
-        "https://news.google.com/rss/search?"
-        "q=("
-        "gold OR "
-        "gold futures OR "
-        "Federal Reserve OR "
-        "DXY OR "
-        "Treasury yields"
-        ")"
-        "&hl=en-US"
-        "&gl=US"
-        "&ceid=US:en"
-    )
-
-    feed = feedparser.parse(
-        url
-    )
-
-    current_time = now_utc()
-
-    articles = []
-
-
-    for entry in feed.entries:
-
-        if not entry.get(
-            "published_parsed"
-        ):
-
-            continue
-
-
-        published = datetime(
-            *entry.published_parsed[:6],
-            tzinfo=timezone.utc,
-        )
-
-
-        age = (
-            current_time
-            - published
-        )
-
-
-        # Reject future-dated articles.
-
-        if age < timedelta(
-            minutes=-5
-        ):
-
-            continue
-
-
-        # Only keep last 48 hours.
-
-        if age > timedelta(
-            hours=48
-        ):
-
-            continue
-
-
-        articles.append({
-
-            "published_et":
-                published
-                .astimezone(ET)
-                .isoformat(),
-
-            "title":
-                entry.get(
-                    "title",
-                    "",
-                ),
-
-            "link":
-                entry.get(
-                    "link",
-                    "",
-                ),
-
-        })
-
-
-    articles.sort(
-        key=lambda x:
-        x["published_et"],
-        reverse=True,
-    )
-
-
-    return articles[:10]
-
-
-# =========================================================
-# PREDICTION ENGINE
-# =========================================================
-
-def analyze(
-    gold,
-    dxy,
-    treasury,
-):
-
-    score = 0
-
-    reasons = []
-
-
-    # GOLD MOMENTUM
-
-    if gold["pct"] > 0.30:
-
-        score += 2
-
-        reasons.append(
-            "Gold is rising strongly."
-        )
-
-    elif gold["pct"] > 0.05:
-
-        score += 1
-
-        reasons.append(
-            "Gold is rising."
-        )
-
-    elif gold["pct"] < -0.30:
-
-        score -= 2
-
-        reasons.append(
-            "Gold is falling strongly."
-        )
-
-    elif gold["pct"] < -0.05:
-
-        score -= 1
-
-        reasons.append(
-            "Gold is falling."
-        )
-
-
-    # DXY
-
-    if dxy["pct"] < -0.15:
-
-        score += 2
-
-        reasons.append(
-            "DXY is falling."
-        )
-
-    elif dxy["pct"] < -0.03:
-
-        score += 1
-
-        reasons.append(
-            "DXY is slightly lower."
-        )
-
-    elif dxy["pct"] > 0.15:
-
-        score -= 2
-
-        reasons.append(
-            "DXY is rising."
-        )
-
-    elif dxy["pct"] > 0.03:
-
-        score -= 1
-
-        reasons.append(
-            "DXY is slightly higher."
-        )
-
-
-    # Current model remains conservative.
-
-    if score >= 3:
-
-        bias = "BULLISH"
-
-        confidence = min(
-            10,
-            6 + score - 3,
-        )
-
-    elif score <= -3:
-
-        bias = "BEARISH"
-
-        confidence = min(
-            10,
-            6 + abs(score) - 3,
-        )
-
-    else:
-
-        bias = "NEUTRAL / WAIT"
-
-        confidence = 5
-
-
-    macro_bias = (
-        "BULLISH"
-        if dxy["pct"] < 0
-        else "MIXED"
-    )
-
-
-    technical_bias = (
-        "BULLISH"
-        if gold["pct"] > 0
-        else "BEARISH"
-    )
-
-
-    # VERY IMPORTANT:
-    # A bullish prediction is NOT an automatic entry.
-
-    setup = (
-        "WAIT FOR CONFIRMATION"
-    )
-
-
-    resistance = gold["high"]
-
-    support = gold["low"]
-
-
-    breakout = (
-        resistance + 2
-        if resistance is not None
-        else None
-    )
-
-
-    return {
-
-        "bias":
-            bias,
-
-        "confidence":
-            confidence,
-
-        "macro_bias":
-            macro_bias,
-
-        "technical_bias":
-            technical_bias,
-
-        "setup":
-            setup,
-
-        "resistance":
-            resistance,
-
-        "support":
-            support,
-
-        "breakout":
-            breakout,
-
-        "reasons":
-            " | ".join(
-                reasons
-            ),
-
-    }
-
-
-# =========================================================
-# GITHUB
+# GITHUB CONNECTION
 # =========================================================
 
 def github_headers():
@@ -617,292 +41,827 @@ def github_headers():
     )
 
     if not token:
-
-        raise RuntimeError(
-            "GITHUB_TOKEN is not configured."
-        )
-
+        return None
 
     return {
-
-        "Authorization":
-            f"Bearer {token}",
-
-        "Accept":
-            "application/vnd.github+json",
-
-        "X-GitHub-Api-Version":
-            "2022-11-28",
-
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
     }
 
 
-def read_history():
+def load_history():
 
     headers = github_headers()
 
+    if not headers:
+        return pd.DataFrame()
+
     url = (
         f"https://api.github.com/repos/"
-        f"{REPO}/contents/"
+        f"{GITHUB_REPO}/contents/"
         f"{HISTORY_PATH}?ref=main"
     )
 
+    try:
 
-    response = requests.get(
-        url,
-        headers=headers,
-        timeout=20,
-    )
+        response = requests.get(
+            url,
+            headers=headers,
+            timeout=15,
+        )
 
+        if response.status_code != 200:
+            return pd.DataFrame()
 
-    if response.status_code == 404:
+        data = response.json()
+
+        content = base64.b64decode(
+            data["content"]
+        )
+
+        return pd.read_csv(
+            io.BytesIO(content)
+        )
+
+    except Exception:
 
         return pd.DataFrame()
 
 
-    response.raise_for_status()
+# =========================================================
+# TIME / FRESHNESS
+# =========================================================
 
+def format_age(timestamp):
 
-    content = base64.b64decode(
-        response.json()["content"]
-    )
+    try:
 
+        if pd.isna(timestamp):
+            return "Unknown"
 
-    return pd.read_csv(
-        io.BytesIO(content)
-    )
+        timestamp = pd.to_datetime(
+            timestamp,
+            utc=True,
+        ).to_pydatetime()
 
-
-def write_history(
-    dataframe
-):
-
-    headers = github_headers()
-
-    url = (
-        f"https://api.github.com/repos/"
-        f"{REPO}/contents/"
-        f"{HISTORY_PATH}"
-    )
-
-
-    existing = requests.get(
-        url,
-        headers=headers,
-        params={
-            "ref": "main"
-        },
-        timeout=20,
-    )
-
-
-    payload = {
-
-        "message":
-            "Update prediction history",
-
-        "content":
-            base64.b64encode(
-                dataframe
-                .to_csv(
-                    index=False
-                )
-                .encode("utf-8")
-            ).decode("ascii"),
-
-        "branch":
-            "main",
-
-    }
-
-
-    if existing.status_code == 200:
-
-        payload["sha"] = (
-            existing.json()["sha"]
+        current = datetime.now(
+            timezone.utc
         )
 
+        seconds = max(
+            0,
+            (
+                current - timestamp
+            ).total_seconds(),
+        )
 
-    response = requests.put(
-        url,
-        headers=headers,
-        json=payload,
-        timeout=20,
-    )
+        if seconds < 60:
+
+            return (
+                f"{int(seconds)} sec ago"
+            )
+
+        if seconds < 3600:
+
+            return (
+                f"{int(seconds // 60)} min ago"
+            )
+
+        if seconds < 86400:
+
+            return (
+                f"{seconds / 3600:.1f} hr ago"
+            )
+
+        return (
+            f"{seconds / 86400:.1f} days ago"
+        )
+
+    except Exception:
+
+        return "Unknown"
 
 
-    response.raise_for_status()
+def format_timestamp(timestamp):
+
+    try:
+
+        dt = pd.to_datetime(
+            timestamp,
+            utc=True,
+        ).tz_convert(ET)
+
+        return dt.strftime(
+            "%Y-%m-%d %I:%M:%S %p ET"
+        )
+
+    except Exception:
+
+        return "Unknown"
 
 
 # =========================================================
-# MAIN
+# SAFE VALUE HELPERS
 # =========================================================
 
-def main():
+def safe_float(value):
 
-    collected = now_utc()
+    try:
+
+        if pd.isna(value):
+            return None
+
+        return float(value)
+
+    except Exception:
+
+        return None
 
 
-    print(
-        "Collecting gold..."
+def money(value):
+
+    value = safe_float(value)
+
+    if value is None:
+        return "Unavailable"
+
+    return f"${value:,.2f}"
+
+
+def number(value, decimals=2):
+
+    value = safe_float(value)
+
+    if value is None:
+        return "Unavailable"
+
+    return f"{value:.{decimals}f}"
+
+
+def percentage(value):
+
+    value = safe_float(value)
+
+    if value is None:
+        return "Unavailable"
+
+    return f"{value:+.2f}%"
+
+
+# =========================================================
+# APPLICATION HEADER
+# =========================================================
+
+st.title(
+    "🥇 Gold Market Monitor"
+)
+
+st.caption(
+    "Dashboard only — market collection runs "
+    "independently through GitHub Actions."
+)
+
+
+# =========================================================
+# LOAD HISTORY
+# =========================================================
+
+history = load_history()
+
+
+if history.empty:
+
+    st.warning(
+        "GitHub storage is connected, but no "
+        "prediction history is currently available."
     )
 
-    gold = get_gold()
-
-
-    print(
-        "Collecting DXY..."
+    st.info(
+        "The background collector must successfully "
+        "run before market data will appear here."
     )
 
-    dxy = get_dxy()
+    st.stop()
 
 
-    print(
-        "Collecting 10Y..."
+# =========================================================
+# NORMALIZE HISTORY
+# =========================================================
+
+if "collected_at_utc" not in history.columns:
+
+    st.error(
+        "prediction_history.csv does not contain "
+        "the collected_at_utc column."
     )
 
-    treasury = get_ten_year()
+    st.stop()
 
 
-    print(
-        "Collecting news..."
+history["collected_at_utc"] = pd.to_datetime(
+    history["collected_at_utc"],
+    errors="coerce",
+    utc=True,
+)
+
+history = history.dropna(
+    subset=["collected_at_utc"]
+)
+
+history = history.sort_values(
+    "collected_at_utc"
+)
+
+
+if history.empty:
+
+    st.warning(
+        "Prediction history contains no valid "
+        "collection timestamps."
     )
 
-    news = get_news()
+    st.stop()
 
 
-    analysis = analyze(
-        gold,
-        dxy,
-        treasury,
+latest = history.iloc[-1]
+
+
+# =========================================================
+# CURRENT MARKET VALUES
+# =========================================================
+
+gold_price = safe_float(
+    latest.get("gold_price")
+)
+
+gold_pct = safe_float(
+    latest.get("gold_pct")
+)
+
+gold_change = safe_float(
+    latest.get("gold_change")
+)
+
+dxy = safe_float(
+    latest.get("dxy")
+)
+
+dxy_pct = safe_float(
+    latest.get("dxy_pct")
+)
+
+ten_year = safe_float(
+    latest.get("teny")
+)
+
+bias = latest.get(
+    "bias",
+    "N/A",
+)
+
+confidence = latest.get(
+    "confidence",
+    "N/A",
+)
+
+
+# =========================================================
+# TOP METRICS
+# =========================================================
+
+st.subheader(
+    "Current Market"
+)
+
+columns = st.columns(4)
+
+
+# GOLD
+
+columns[0].metric(
+    "🥇 Gold — Oct 2026",
+    (
+        money(gold_price)
+        if gold_price is not None
+        else "Unavailable"
+    ),
+    (
+        percentage(gold_pct)
+        if gold_pct is not None
+        else None
+    ),
+)
+
+
+# DXY
+
+columns[1].metric(
+    "💵 DXY",
+    (
+        number(dxy, 3)
+        if dxy is not None
+        else "Unavailable"
+    ),
+    (
+        percentage(dxy_pct)
+        if dxy_pct is not None
+        else None
+    ),
+)
+
+
+# 10 YEAR
+
+columns[2].metric(
+    "🇺🇸 10Y Treasury",
+    (
+        f"{ten_year:.2f}%"
+        if ten_year is not None
+        else "Unavailable"
+    ),
+)
+
+
+# BIAS
+
+columns[3].metric(
+    "Market Bias",
+    str(bias),
+    (
+        f"Confidence {confidence}/10"
+        if confidence != "N/A"
+        else None
+    ),
+)
+
+
+# =========================================================
+# COLLECTION TIMESTAMP
+# =========================================================
+
+st.subheader(
+    "⏱ Data Freshness"
+)
+
+fresh_columns = st.columns(3)
+
+
+gold_time = latest.get(
+    "gold_retrieved_at_utc"
+)
+
+dxy_time = latest.get(
+    "dxy_retrieved_at_utc"
+)
+
+ten_year_time = latest.get(
+    "teny_retrieved_at_utc"
+)
+
+
+fresh_columns[0].metric(
+    "Gold",
+    format_age(gold_time),
+)
+
+fresh_columns[0].caption(
+    format_timestamp(gold_time)
+)
+
+
+fresh_columns[1].metric(
+    "DXY",
+    format_age(dxy_time),
+)
+
+fresh_columns[1].caption(
+    format_timestamp(dxy_time)
+)
+
+
+fresh_columns[2].metric(
+    "10Y Treasury",
+    format_age(ten_year_time),
+)
+
+fresh_columns[2].caption(
+    format_timestamp(ten_year_time)
+)
+
+
+# =========================================================
+# COLLECTION STATUS
+# =========================================================
+
+collection_time = latest.get(
+    "collected_at_utc"
+)
+
+st.write(
+    "**Last complete prediction collection:** "
+    + format_timestamp(collection_time)
+)
+
+
+# =========================================================
+# DATA QUALITY
+# =========================================================
+
+quality = str(
+    latest.get(
+        "data_quality",
+        "UNKNOWN",
+    )
+)
+
+
+st.subheader(
+    "📊 Data Quality"
+)
+
+
+if quality == "PASS":
+
+    st.success(
+        "🟢 DATA QUALITY: PASS"
+    )
+
+elif quality == "WARN":
+
+    st.warning(
+        "🟡 DATA QUALITY: WARNING"
+    )
+
+    st.caption(
+        "Gold is being collected from a public quote "
+        "page. The collector records when it retrieved "
+        "the page, but does not claim that timestamp is "
+        "the exchange timestamp."
+    )
+
+else:
+
+    st.error(
+        f"🔴 DATA QUALITY: {quality}"
     )
 
 
-    # -----------------------------------------------------
-    # DATA QUALITY
-    # -----------------------------------------------------
-    #
-    # We deliberately mark gold as WARN because the public
-    # page does not expose an independently verified exchange
-    # timestamp.
-    #
-    # This prevents us from pretending the source is real-time.
-    #
+# =========================================================
+# GOLD CONTRACT INFORMATION
+# =========================================================
 
-    data_quality = "WARN"
+st.subheader(
+    "🥇 Gold Contract"
+)
 
+contract = latest.get(
+    "gold_symbol",
+    "1OZV6",
+)
 
-    row = {
-
-        "collected_at_utc":
-            collected.isoformat(),
-
-        "legacy":
-            False,
+gold_status = latest.get(
+    "gold_status",
+    "Unknown",
+)
 
 
-        # GOLD
+contract_columns = st.columns(3)
 
-        "gold_symbol":
-            "1OZV6",
 
-        "gold_price":
-            gold["price"],
+contract_columns[0].write(
+    f"**Contract:** {contract}"
+)
 
-        "gold_pct":
-            gold["pct"],
+contract_columns[1].write(
+    "**Market:** COMEX"
+)
 
-        "gold_change":
-            gold["change"],
+contract_columns[2].write(
+    "**Month:** October 2026"
+)
 
-        "gold_high":
-            gold["high"],
 
-        "gold_low":
-            gold["low"],
+st.caption(
+    f"Gold data status: {gold_status}"
+)
 
-        "gold_prev_settle":
-            gold[
-                "previous_settlement"
+
+# =========================================================
+# MARKET LEVELS
+# =========================================================
+
+st.subheader(
+    "📈 Gold Levels"
+)
+
+level_columns = st.columns(5)
+
+
+gold_high = safe_float(
+    latest.get("gold_high")
+)
+
+gold_low = safe_float(
+    latest.get("gold_low")
+)
+
+support = safe_float(
+    latest.get("support")
+)
+
+resistance = safe_float(
+    latest.get("resistance")
+)
+
+breakout = safe_float(
+    latest.get("breakout")
+)
+
+
+level_columns[0].metric(
+    "Today's High",
+    money(gold_high),
+)
+
+level_columns[1].metric(
+    "Today's Low",
+    money(gold_low),
+)
+
+level_columns[2].metric(
+    "Support",
+    money(support),
+)
+
+level_columns[3].metric(
+    "Resistance",
+    money(resistance),
+)
+
+level_columns[4].metric(
+    "Breakout",
+    money(breakout),
+)
+
+
+# =========================================================
+# PREDICTION
+# =========================================================
+
+st.subheader(
+    "🔮 Current Prediction"
+)
+
+
+prediction_columns = st.columns(3)
+
+
+prediction_columns[0].metric(
+    "Overall Bias",
+    str(
+        latest.get(
+            "bias",
+            "N/A",
+        )
+    ),
+)
+
+
+prediction_columns[1].metric(
+    "Macro",
+    str(
+        latest.get(
+            "macro_bias",
+            "N/A",
+        )
+    ),
+)
+
+
+prediction_columns[2].metric(
+    "Technical",
+    str(
+        latest.get(
+            "technical_bias",
+            "N/A",
+        )
+    ),
+)
+
+
+setup = latest.get(
+    "setup",
+    "N/A",
+)
+
+
+st.info(
+    f"**Trade Setup:** {setup}"
+)
+
+
+# =========================================================
+# REASONS
+# =========================================================
+
+reasons = latest.get(
+    "reasons"
+)
+
+
+if pd.notna(reasons):
+
+    st.subheader(
+        "Why the Model Says This"
+    )
+
+    for reason in str(
+        reasons
+    ).split(" | "):
+
+        if reason.strip():
+
+            st.write(
+                "• " + reason.strip()
+            )
+
+
+# =========================================================
+# NEWS COUNT
+# =========================================================
+
+news_count = latest.get(
+    "news_count"
+)
+
+
+if pd.notna(news_count):
+
+    st.caption(
+        f"Recent news articles considered: "
+        f"{int(float(news_count))}"
+    )
+
+
+# =========================================================
+# PERFORMANCE
+# =========================================================
+
+st.subheader(
+    "🎯 Prediction Performance"
+)
+
+
+# Only calculate validated performance
+# when outcome columns actually exist.
+
+if (
+    "prediction_correct"
+    in history.columns
+):
+
+    valid = history[
+        history[
+            "prediction_correct"
+        ].notna()
+    ]
+
+    if not valid.empty:
+
+        correct = (
+            valid[
+                "prediction_correct"
+            ]
+            .astype(bool)
+            .sum()
+        )
+
+        total = len(valid)
+
+        accuracy = (
+            correct / total * 100
+        )
+
+        p1, p2, p3 = st.columns(3)
+
+        p1.metric(
+            "Correct",
+            correct,
+        )
+
+        p2.metric(
+            "Evaluated",
+            total,
+        )
+
+        p3.metric(
+            "Accuracy",
+            f"{accuracy:.1f}%",
+        )
+
+    else:
+
+        st.info(
+            "Prediction outcomes have not "
+            "been evaluated yet."
+        )
+
+else:
+
+    st.info(
+        "Prediction performance will appear "
+        "once predictions have enough subsequent "
+        "market data to be evaluated."
+    )
+
+
+# =========================================================
+# HISTORY
+# =========================================================
+
+st.subheader(
+    "📚 Prediction History"
+)
+
+
+display_history = history.copy()
+
+
+# Legacy data remains stored.
+# We simply don't mix it into future
+# validated performance calculations.
+
+if "legacy" in display_history.columns:
+
+    legacy_mask = (
+        display_history["legacy"]
+        .fillna(False)
+        .astype(str)
+        .str.lower()
+        == "true"
+    )
+
+    display_history = (
+        display_history[
+            ~legacy_mask
+        ]
+    )
+
+
+display_history = (
+    display_history
+    .sort_values(
+        "collected_at_utc",
+        ascending=False,
+    )
+    .head(100)
+)
+
+
+# Convert timestamps to something
+# human-readable.
+
+if "collected_at_utc" in display_history:
+
+    display_history[
+        "collected_at_utc"
+    ] = (
+        pd.to_datetime(
+            display_history[
+                "collected_at_utc"
             ],
-
-        "gold_retrieved_at_utc":
-            gold[
-                "retrieved_at_utc"
-            ],
-
-        "gold_status":
-            "PUBLIC_PAGE_RETRIEVAL_TIME_ONLY",
-
-
-        # DXY
-
-        "dxy":
-            dxy["price"],
-
-        "dxy_pct":
-            dxy["pct"],
-
-        "dxy_retrieved_at_utc":
-            dxy[
-                "retrieved_at_utc"
-            ],
-
-
-        # 10Y
-
-        "teny":
-            treasury["value"],
-
-        "teny_date":
-            treasury["date"],
-
-        "teny_retrieved_at_utc":
-            treasury[
-                "retrieved_at_utc"
-            ],
-
-
-        # QUALITY
-
-        "data_quality":
-            data_quality,
-
-
-        "news_count":
-            len(news),
-
-        **analysis,
-
-    }
-
-
-    history = read_history()
-
-
-    history = pd.concat(
-        [
-            history,
-            pd.DataFrame(
-                [row]
-            ),
-        ],
-        ignore_index=True,
+            utc=True,
+        )
+        .dt.tz_convert(ET)
+        .dt.strftime(
+            "%Y-%m-%d %I:%M:%S %p ET"
+        )
     )
 
 
-    write_history(
-        history
+st.dataframe(
+    display_history,
+    use_container_width=True,
+    hide_index=True,
+)
+
+
+# =========================================================
+# FOOTER
+# =========================================================
+
+st.divider()
+
+st.caption(
+    "Gold Market Monitor — "
+    "background collection is handled by "
+    "GitHub Actions, not by the dashboard."
+)
+
+st.caption(
+    "Dashboard viewed: "
+    + datetime.now(ET).strftime(
+        "%Y-%m-%d %I:%M:%S %p ET"
     )
-
-
-    print(
-        "Prediction successfully recorded."
-    )
-
-    print(row)
-
-
-if __name__ == "__main__":
-
-    main()
+)
