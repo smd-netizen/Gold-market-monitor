@@ -1,16 +1,16 @@
-name: Gold Market Monitor
+name: Collect market data
 
 on:
   schedule:
     - cron: "*/5 * * * *"
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   collect-market-data:
     runs-on: ubuntu-latest
-
-    permissions:
-      contents: write
 
     steps:
       - name: Checkout repository
@@ -26,8 +26,19 @@ jobs:
           pip install -r requirements.txt
 
       - name: Collect market data
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_REPO: ${{ github.repository }}
         run: |
           python market_collector.py
+
+      - name: Commit updated market data
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add prediction_history.csv
+
+          if git diff --cached --quiet; then
+            echo "No market data changes to commit."
+          else
+            git commit -m "Update market data"
+            git push
+          fi
