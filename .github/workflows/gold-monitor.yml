@@ -12,6 +12,9 @@ jobs:
   collect-market-data:
     runs-on: ubuntu-latest
 
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
