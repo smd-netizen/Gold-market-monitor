@@ -30,7 +30,7 @@ HISTORY_PATH = "prediction_history.csv"
 
 
 # =========================================================
-# GITHUB CONNECTION
+# GITHUB
 # =========================================================
 
 def github_headers():
@@ -74,10 +74,8 @@ def load_history():
         if response.status_code != 200:
             return pd.DataFrame()
 
-        data = response.json()
-
         content = base64.b64decode(
-            data["content"]
+            response.json()["content"]
         )
 
         return pd.read_csv(
@@ -90,79 +88,7 @@ def load_history():
 
 
 # =========================================================
-# TIME / FRESHNESS
-# =========================================================
-
-def format_age(timestamp):
-
-    try:
-
-        if pd.isna(timestamp):
-            return "Unknown"
-
-        timestamp = pd.to_datetime(
-            timestamp,
-            utc=True,
-        ).to_pydatetime()
-
-        current = datetime.now(
-            timezone.utc
-        )
-
-        seconds = max(
-            0,
-            (
-                current - timestamp
-            ).total_seconds(),
-        )
-
-        if seconds < 60:
-
-            return (
-                f"{int(seconds)} sec ago"
-            )
-
-        if seconds < 3600:
-
-            return (
-                f"{int(seconds // 60)} min ago"
-            )
-
-        if seconds < 86400:
-
-            return (
-                f"{seconds / 3600:.1f} hr ago"
-            )
-
-        return (
-            f"{seconds / 86400:.1f} days ago"
-        )
-
-    except Exception:
-
-        return "Unknown"
-
-
-def format_timestamp(timestamp):
-
-    try:
-
-        dt = pd.to_datetime(
-            timestamp,
-            utc=True,
-        ).tz_convert(ET)
-
-        return dt.strftime(
-            "%Y-%m-%d %I:%M:%S %p ET"
-        )
-
-    except Exception:
-
-        return "Unknown"
-
-
-# =========================================================
-# SAFE VALUE HELPERS
+# HELPERS
 # =========================================================
 
 def safe_float(value):
@@ -209,8 +135,97 @@ def percentage(value):
     return f"{value:+.2f}%"
 
 
+def format_age(timestamp):
+
+    try:
+
+        if pd.isna(timestamp):
+            return "Unknown"
+
+        timestamp = pd.to_datetime(
+            timestamp,
+            utc=True,
+        ).to_pydatetime()
+
+        seconds = max(
+            0,
+            (
+                datetime.now(timezone.utc)
+                - timestamp
+            ).total_seconds(),
+        )
+
+        if seconds < 60:
+            return f"{int(seconds)} sec ago"
+
+        if seconds < 3600:
+            return f"{int(seconds // 60)} min ago"
+
+        if seconds < 86400:
+            return f"{seconds / 3600:.1f} hr ago"
+
+        return f"{seconds / 86400:.1f} days ago"
+
+    except Exception:
+
+        return "Unknown"
+
+
+def format_timestamp(timestamp):
+
+    try:
+
+        dt = pd.to_datetime(
+            timestamp,
+            utc=True,
+        ).tz_convert(ET)
+
+        return dt.strftime(
+            "%Y-%m-%d %I:%M:%S %p ET"
+        )
+
+    except Exception:
+
+        return "Unknown"
+
+
 # =========================================================
-# APPLICATION HEADER
+# FIND THE TIMESTAMP COLUMN
+# =========================================================
+
+def find_timestamp_column(df):
+
+    possible_columns = [
+
+        "collected_at_utc",
+
+        "timestamp",
+
+        "datetime",
+
+        "date",
+
+        "time",
+
+        "created_at",
+
+        "prediction_time",
+
+        "recorded_at",
+
+    ]
+
+    for column in possible_columns:
+
+        if column in df.columns:
+
+            return column
+
+    return None
+
+
+# =========================================================
+# APPLICATION
 # =========================================================
 
 st.title(
@@ -224,7 +239,7 @@ st.caption(
 
 
 # =========================================================
-# LOAD HISTORY
+# LOAD DATA
 # =========================================================
 
 history = load_history()
@@ -233,62 +248,84 @@ history = load_history()
 if history.empty:
 
     st.warning(
-        "GitHub storage is connected, but no "
-        "prediction history is currently available."
+        "GitHub storage is connected, but "
+        "prediction_history.csv is empty or "
+        "could not be loaded."
+    )
+
+    st.stop()
+
+
+# =========================================================
+# TIMESTAMP COMPATIBILITY
+# =========================================================
+
+timestamp_column = find_timestamp_column(
+    history
+)
+
+
+if timestamp_column is None:
+
+    st.warning(
+        "The existing prediction history uses "
+        "an older format that does not contain "
+        "a recognizable timestamp."
+    )
+
+    st.write(
+        "**Columns currently found:**"
+    )
+
+    st.code(
+        ", ".join(
+            history.columns.astype(str)
+        )
     )
 
     st.info(
-        "The background collector must successfully "
-        "run before market data will appear here."
+        "The existing history will not be deleted. "
+        "The new collector will begin writing the "
+        "new format once GitHub Actions runs."
     )
 
     st.stop()
 
 
-# =========================================================
-# NORMALIZE HISTORY
-# =========================================================
+# Convert whatever timestamp format we found.
 
-if "collected_at_utc" not in history.columns:
-
-    st.error(
-        "prediction_history.csv does not contain "
-        "the collected_at_utc column."
-    )
-
-    st.stop()
-
-
-history["collected_at_utc"] = pd.to_datetime(
-    history["collected_at_utc"],
+history["_timestamp"] = pd.to_datetime(
+    history[timestamp_column],
     errors="coerce",
     utc=True,
 )
 
-history = history.dropna(
-    subset=["collected_at_utc"]
-)
 
-history = history.sort_values(
-    "collected_at_utc"
+history = history.dropna(
+    subset=["_timestamp"]
 )
 
 
 if history.empty:
 
     st.warning(
-        "Prediction history contains no valid "
-        "collection timestamps."
+        "The existing history contains timestamps, "
+        "but none could be interpreted."
     )
 
     st.stop()
+
+
+history = history.sort_values(
+    "_timestamp"
+)
 
 
 latest = history.iloc[-1]
 
 
 # =========================================================
-# CURRENT MARKET VALUES
+# CURRENT VALUES
 # =========================================================
 
 gold_price = safe_float(
@@ -297,10 +334,6 @@ gold_price = safe_float(
 
 gold_pct = safe_float(
     latest.get("gold_pct")
-)
-
-gold_change = safe_float(
-    latest.get("gold_change")
 )
 
 dxy = safe_float(
@@ -327,7 +360,7 @@ confidence = latest.get(
 
 
 # =========================================================
-# TOP METRICS
+# MARKET METRICS
 # =========================================================
 
 st.subheader(
@@ -337,15 +370,15 @@ st.subheader(
 columns = st.columns(4)
 
 
-# GOLD
-
 columns[0].metric(
     "🥇 Gold — Oct 2026",
+
     (
         money(gold_price)
         if gold_price is not None
         else "Unavailable"
     ),
+
     (
         percentage(gold_pct)
         if gold_pct is not None
@@ -354,15 +387,15 @@ columns[0].metric(
 )
 
 
-# DXY
-
 columns[1].metric(
     "💵 DXY",
+
     (
         number(dxy, 3)
         if dxy is not None
         else "Unavailable"
     ),
+
     (
         percentage(dxy_pct)
         if dxy_pct is not None
@@ -371,10 +404,9 @@ columns[1].metric(
 )
 
 
-# 10 YEAR
-
 columns[2].metric(
     "🇺🇸 10Y Treasury",
+
     (
         f"{ten_year:.2f}%"
         if ten_year is not None
@@ -383,11 +415,11 @@ columns[2].metric(
 )
 
 
-# BIAS
-
 columns[3].metric(
     "Market Bias",
+
     str(bias),
+
     (
         f"Confidence {confidence}/10"
         if confidence != "N/A"
@@ -397,70 +429,68 @@ columns[3].metric(
 
 
 # =========================================================
-# COLLECTION TIMESTAMP
+# FRESHNESS
 # =========================================================
 
 st.subheader(
     "⏱ Data Freshness"
 )
 
-fresh_columns = st.columns(3)
+
+fresh = st.columns(3)
 
 
 gold_time = latest.get(
-    "gold_retrieved_at_utc"
+    "gold_retrieved_at_utc",
+    latest["_timestamp"],
 )
 
 dxy_time = latest.get(
-    "dxy_retrieved_at_utc"
+    "dxy_retrieved_at_utc",
+    latest["_timestamp"],
 )
 
 ten_year_time = latest.get(
-    "teny_retrieved_at_utc"
+    "teny_retrieved_at_utc",
+    latest["_timestamp"],
 )
 
 
-fresh_columns[0].metric(
+fresh[0].metric(
     "Gold",
     format_age(gold_time),
 )
 
-fresh_columns[0].caption(
+fresh[0].caption(
     format_timestamp(gold_time)
 )
 
 
-fresh_columns[1].metric(
+fresh[1].metric(
     "DXY",
     format_age(dxy_time),
 )
 
-fresh_columns[1].caption(
+fresh[1].caption(
     format_timestamp(dxy_time)
 )
 
 
-fresh_columns[2].metric(
+fresh[2].metric(
     "10Y Treasury",
     format_age(ten_year_time),
 )
 
-fresh_columns[2].caption(
+fresh[2].caption(
     format_timestamp(ten_year_time)
 )
 
 
-# =========================================================
-# COLLECTION STATUS
-# =========================================================
-
-collection_time = latest.get(
-    "collected_at_utc"
-)
-
 st.write(
-    "**Last complete prediction collection:** "
-    + format_timestamp(collection_time)
+    "**Last prediction collection:** "
+    + format_timestamp(
+        latest["_timestamp"]
+    )
 )
 
 
@@ -471,7 +501,7 @@ st.write(
 quality = str(
     latest.get(
         "data_quality",
-        "UNKNOWN",
+        "LEGACY DATA",
     )
 )
 
@@ -493,11 +523,12 @@ elif quality == "WARN":
         "🟡 DATA QUALITY: WARNING"
     )
 
-    st.caption(
-        "Gold is being collected from a public quote "
-        "page. The collector records when it retrieved "
-        "the page, but does not claim that timestamp is "
-        "the exchange timestamp."
+elif quality == "LEGACY DATA":
+
+    st.info(
+        "🔵 LEGACY DATA — this observation "
+        "was created by the previous version "
+        "of the monitor."
     )
 
 else:
@@ -508,101 +539,92 @@ else:
 
 
 # =========================================================
-# GOLD CONTRACT INFORMATION
+# GOLD
 # =========================================================
 
 st.subheader(
     "🥇 Gold Contract"
 )
 
-contract = latest.get(
-    "gold_symbol",
-    "1OZV6",
+
+gold_columns = st.columns(3)
+
+
+gold_columns[0].write(
+    "**Contract:** "
+    + str(
+        latest.get(
+            "gold_symbol",
+            "1OZV6",
+        )
+    )
 )
 
-gold_status = latest.get(
-    "gold_status",
-    "Unknown",
-)
 
-
-contract_columns = st.columns(3)
-
-
-contract_columns[0].write(
-    f"**Contract:** {contract}"
-)
-
-contract_columns[1].write(
+gold_columns[1].write(
     "**Market:** COMEX"
 )
 
-contract_columns[2].write(
+
+gold_columns[2].write(
     "**Month:** October 2026"
 )
 
 
-st.caption(
-    f"Gold data status: {gold_status}"
-)
-
-
 # =========================================================
-# MARKET LEVELS
+# GOLD LEVELS
 # =========================================================
 
 st.subheader(
     "📈 Gold Levels"
 )
 
-level_columns = st.columns(5)
+
+levels = st.columns(5)
 
 
-gold_high = safe_float(
-    latest.get("gold_high")
-)
+level_values = [
 
-gold_low = safe_float(
-    latest.get("gold_low")
-)
+    (
+        "Today's High",
+        latest.get("gold_high"),
+    ),
 
-support = safe_float(
-    latest.get("support")
-)
+    (
+        "Today's Low",
+        latest.get("gold_low"),
+    ),
 
-resistance = safe_float(
-    latest.get("resistance")
-)
+    (
+        "Support",
+        latest.get("support"),
+    ),
 
-breakout = safe_float(
-    latest.get("breakout")
-)
+    (
+        "Resistance",
+        latest.get("resistance"),
+    ),
+
+    (
+        "Breakout",
+        latest.get("breakout"),
+    ),
+
+]
 
 
-level_columns[0].metric(
-    "Today's High",
-    money(gold_high),
-)
+for column, (
+    label,
+    value,
+) in zip(
+    levels,
+    level_values,
+):
 
-level_columns[1].metric(
-    "Today's Low",
-    money(gold_low),
-)
-
-level_columns[2].metric(
-    "Support",
-    money(support),
-)
-
-level_columns[3].metric(
-    "Resistance",
-    money(resistance),
-)
-
-level_columns[4].metric(
-    "Breakout",
-    money(breakout),
-)
+    column.metric(
+        label,
+        money(value),
+    )
 
 
 # =========================================================
@@ -614,10 +636,10 @@ st.subheader(
 )
 
 
-prediction_columns = st.columns(3)
+prediction = st.columns(3)
 
 
-prediction_columns[0].metric(
+prediction[0].metric(
     "Overall Bias",
     str(
         latest.get(
@@ -628,7 +650,7 @@ prediction_columns[0].metric(
 )
 
 
-prediction_columns[1].metric(
+prediction[1].metric(
     "Macro",
     str(
         latest.get(
@@ -639,7 +661,7 @@ prediction_columns[1].metric(
 )
 
 
-prediction_columns[2].metric(
+prediction[2].metric(
     "Technical",
     str(
         latest.get(
@@ -650,14 +672,14 @@ prediction_columns[2].metric(
 )
 
 
-setup = latest.get(
-    "setup",
-    "N/A",
-)
-
-
 st.info(
-    f"**Trade Setup:** {setup}"
+    "**Trade Setup:** "
+    + str(
+        latest.get(
+            "setup",
+            "N/A",
+        )
+    )
 )
 
 
@@ -683,38 +705,19 @@ if pd.notna(reasons):
         if reason.strip():
 
             st.write(
-                "• " + reason.strip()
+                "• "
+                + reason.strip()
             )
 
 
 # =========================================================
-# NEWS COUNT
-# =========================================================
-
-news_count = latest.get(
-    "news_count"
-)
-
-
-if pd.notna(news_count):
-
-    st.caption(
-        f"Recent news articles considered: "
-        f"{int(float(news_count))}"
-    )
-
-
-# =========================================================
-# PERFORMANCE
+# PREDICTION PERFORMANCE
 # =========================================================
 
 st.subheader(
     "🎯 Prediction Performance"
 )
 
-
-# Only calculate validated performance
-# when outcome columns actually exist.
 
 if (
     "prediction_correct"
@@ -727,9 +730,10 @@ if (
         ].notna()
     ]
 
+
     if not valid.empty:
 
-        correct = (
+        correct = int(
             valid[
                 "prediction_correct"
             ]
@@ -740,22 +744,28 @@ if (
         total = len(valid)
 
         accuracy = (
-            correct / total * 100
+            correct
+            / total
+            * 100
         )
 
-        p1, p2, p3 = st.columns(3)
 
-        p1.metric(
+        performance = st.columns(3)
+
+
+        performance[0].metric(
             "Correct",
             correct,
         )
 
-        p2.metric(
+
+        performance[1].metric(
             "Evaluated",
             total,
         )
 
-        p3.metric(
+
+        performance[2].metric(
             "Accuracy",
             f"{accuracy:.1f}%",
         )
@@ -763,16 +773,15 @@ if (
     else:
 
         st.info(
-            "Prediction outcomes have not "
-            "been evaluated yet."
+            "No predictions have been evaluated yet."
         )
 
 else:
 
     st.info(
-        "Prediction performance will appear "
-        "once predictions have enough subsequent "
-        "market data to be evaluated."
+        "Prediction accuracy will appear once "
+        "the new collector begins evaluating "
+        "previous predictions."
     )
 
 
@@ -788,55 +797,28 @@ st.subheader(
 display_history = history.copy()
 
 
-# Legacy data remains stored.
-# We simply don't mix it into future
-# validated performance calculations.
+# Remove our internal compatibility column.
 
-if "legacy" in display_history.columns:
-
-    legacy_mask = (
-        display_history["legacy"]
-        .fillna(False)
-        .astype(str)
-        .str.lower()
-        == "true"
-    )
+if "_timestamp" in display_history.columns:
 
     display_history = (
-        display_history[
-            ~legacy_mask
-        ]
+        display_history.drop(
+            columns=["_timestamp"]
+        )
     )
 
 
-display_history = (
-    display_history
-    .sort_values(
-        "collected_at_utc",
-        ascending=False,
-    )
-    .head(100)
-)
+# Put newest first.
 
+if timestamp_column in display_history.columns:
 
-# Convert timestamps to something
-# human-readable.
-
-if "collected_at_utc" in display_history:
-
-    display_history[
-        "collected_at_utc"
-    ] = (
-        pd.to_datetime(
-            display_history[
-                "collected_at_utc"
-            ],
-            utc=True,
+    display_history = (
+        display_history
+        .sort_values(
+            timestamp_column,
+            ascending=False,
         )
-        .dt.tz_convert(ET)
-        .dt.strftime(
-            "%Y-%m-%d %I:%M:%S %p ET"
-        )
+        .head(100)
     )
 
 
@@ -855,8 +837,8 @@ st.divider()
 
 st.caption(
     "Gold Market Monitor — "
-    "background collection is handled by "
-    "GitHub Actions, not by the dashboard."
+    "background collection is handled "
+    "by GitHub Actions."
 )
 
 st.caption(
