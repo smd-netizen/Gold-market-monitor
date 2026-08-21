@@ -3,6 +3,7 @@ import io
 import os
 import re
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import requests
@@ -30,8 +31,14 @@ TREASURY_URL = (
     "resource-center/data-chart-center/"
     "interest-rates/TextView"
     "?type=daily_treasury_yield_curve"
+    "&field_tdr_date_value=2026"
 )
 
+DXY_URL = (
+    "https://www.marketwatch.com/investing/index/dxy"
+)
+
+ET = ZoneInfo("America/New_York")
 
 HEADERS = {
     "User-Agent": (
@@ -51,7 +58,36 @@ HEADERS = {
 def now_utc():
     return datetime.now(
         timezone.utc
-    ).isoformat()
+    )
+
+
+def iso_utc():
+    return now_utc().isoformat()
+
+
+# ============================================================
+# SAFE NUMBER PARSER
+# ============================================================
+
+def parse_number(value):
+
+    if value is None:
+        return None
+
+    try:
+
+        text = (
+            str(value)
+            .replace(",", "")
+            .replace("%", "")
+            .strip()
+        )
+
+        return float(text)
+
+    except Exception:
+
+        return None
 
 
 # ============================================================
@@ -60,7 +96,9 @@ def now_utc():
 
 def get_webull_gold():
 
-    print("Requesting Webull Gold page...")
+    print(
+        "Requesting Webull public Gold page..."
+    )
 
     response = requests.get(
         WEBULL_URL,
@@ -73,130 +111,168 @@ def get_webull_gold():
     html = response.text
 
     print(
-        f"Webull page received: "
+        f"Webull response: "
         f"{len(html):,} characters"
     )
 
+    # --------------------------------------------------------
+    # Gold price
+    # --------------------------------------------------------
+
     price = None
 
-    # Look for several common Webull
-    # representations of the last price.
+    price_patterns = [
 
-    patterns = [
-        r'"lastPrice"\s*:\s*"?([0-9,]+\.[0-9]+)"?',
-        r'"last"\s*:\s*"?([0-9,]+\.[0-9]+)"?',
-        r'"price"\s*:\s*"?([0-9,]+\.[0-9]+)"?',
+        r'"lastPrice"\s*:\s*"?(?:\$)?([0-9,]+\.[0-9]+)"?',
+
+        r'"last"\s*:\s*"?(?:\$)?([0-9,]+\.[0-9]+)"?',
+
+        r'"price"\s*:\s*"?(?:\$)?([0-9,]+\.[0-9]+)"?',
+
     ]
 
-    for pattern in patterns:
+    for pattern in price_patterns:
 
-        match = re.search(
+        matches = re.findall(
             pattern,
             html,
             re.IGNORECASE,
         )
 
-        if not match:
-            continue
+        for match in matches:
 
-        try:
-
-            candidate = float(
-                match.group(1).replace(
-                    ",",
-                    "",
-                )
+            candidate = parse_number(
+                match
             )
 
-            # Sanity check for Gold.
-
-            if 3000 <= candidate <= 10000:
+            if candidate is not None and (
+                3000 <= candidate <= 10000
+            ):
 
                 price = candidate
                 break
 
-        except Exception:
-            continue
+        if price is not None:
+            break
 
     if price is None:
 
         raise RuntimeError(
-            "Webull responded successfully, "
-            "but the Gold price could not be "
-            "identified on the public page."
+            "Webull returned a page, but "
+            "the Gold price could not be "
+            "identified."
         )
 
-    # Try to find Webull's displayed
-    # percentage change.
+    # --------------------------------------------------------
+    # Gold percentage change
+    # --------------------------------------------------------
 
-    change_pct = None
+    gold_pct = None
 
     pct_patterns = [
-        r'"changePercent"\s*:\s*"?([^"}]+)"?',
-        r'"changePct"\s*:\s*"?([^"}]+)"?',
+
+        r'"changePercent"\s*:\s*"?(?:\+)?(-?[0-9]+(?:\.[0-9]+)?)%?"?',
+
+        r'"changePct"\s*:\s*"?(?:\+)?(-?[0-9]+(?:\.[0-9]+)?)%?"?',
+
+        r'"percentChange"\s*:\s*"?(?:\+)?(-?[0-9]+(?:\.[0-9]+)?)%?"?',
+
     ]
 
     for pattern in pct_patterns:
 
-        match = re.search(
+        matches = re.findall(
             pattern,
             html,
             re.IGNORECASE,
         )
 
-        if not match:
-            continue
+        for match in matches:
 
-        try:
-
-            text = (
-                match.group(1)
-                .replace("%", "")
-                .replace(",", "")
-                .strip()
+            candidate = parse_number(
+                match
             )
 
-            value = float(text)
+            if candidate is None:
+                continue
 
-            # If Webull supplies a decimal
-            # fraction, convert it to percent.
+            # Avoid accidentally accepting
+            # an unrelated percentage.
 
-            if abs(value) < 1:
+            if abs(candidate) <= 20:
 
-                value *= 100
+                gold_pct = candidate
+                break
 
-            change_pct = value
-
+        if gold_pct is not None:
             break
 
-        except Exception:
-            continue
+    # --------------------------------------------------------
+    # Fallback: locate percentage-looking
+    # values near Gold quote information.
+    # --------------------------------------------------------
 
-    retrieved = now_utc()
+    if gold_pct is None:
+
+        gold_section = re.search(
+            r"1OZV6.{0,30000}",
+            html,
+            re.IGNORECASE | re.DOTALL,
+        )
+
+        if gold_section:
+
+            section = (
+                gold_section.group(0)
+            )
+
+            candidates = re.findall(
+                r"[-+]?[0-9]+(?:\.[0-9]+)?%",
+                section,
+            )
+
+            for candidate in candidates:
+
+                value = parse_number(
+                    candidate
+                )
+
+                if (
+                    value is not None
+                    and abs(value) <= 20
+                ):
+
+                    gold_pct = value
+                    break
+
+    retrieved = iso_utc()
 
     print(
-        f"Gold price: ${price:,.2f}"
+        f"Gold: ${price:,.2f}"
     )
 
-    if change_pct is not None:
+    if gold_pct is None:
 
         print(
-            f"Gold change: "
-            f"{change_pct:+.2f}%"
+            "Gold % change: unavailable"
         )
 
     else:
 
         print(
-            "Gold change: unavailable"
+            f"Gold % change: "
+            f"{gold_pct:+.2f}%"
         )
 
     return {
         "gold_price": price,
-        "gold_pct": change_pct,
-        "gold_retrieved_at_utc": retrieved,
-        "gold_source": WEBULL_URL,
-        "contract": "1OZV6.CMX",
+        "gold_pct": gold_pct,
+        "gold_retrieved_at_utc":
+            retrieved,
+        "gold_source":
+            WEBULL_URL,
+        "contract":
+            "1OZV6.CMX",
         "contract_name":
             "1-Ounce Gold — October 2026",
     }
@@ -209,7 +285,7 @@ def get_webull_gold():
 def get_treasury():
 
     print(
-        "Requesting U.S. Treasury data..."
+        "Requesting official Treasury data..."
     )
 
     response = requests.get(
@@ -229,113 +305,170 @@ def get_treasury():
     if not tables:
 
         raise RuntimeError(
-            "The Treasury page returned "
-            "no tables."
+            "Treasury page returned no tables."
         )
 
-    table = None
+    valid_tables = []
 
-    for candidate in tables:
+    for table in tables:
 
-        text = " ".join(
+        # Flatten MultiIndex columns.
+
+        if isinstance(
+            table.columns,
+            pd.MultiIndex,
+        ):
+
+            table.columns = [
+                " ".join(
+                    str(part)
+                    for part in column
+                    if str(part) != "nan"
+                ).strip()
+                for column in table.columns
+            ]
+
+        columns = [
             str(column)
-            for column in candidate.columns
-        )
-
-        if "10 Yr" in text:
-
-            table = candidate
-            break
-
-    if table is None:
-
-        raise RuntimeError(
-            "Could not find the Treasury "
-            "10-year column."
-        )
-
-    # Flatten MultiIndex columns.
-
-    if isinstance(
-        table.columns,
-        pd.MultiIndex,
-    ):
-
-        table.columns = [
-            " ".join(
-                str(part)
-                for part in column
-                if str(part) != "nan"
-            ).strip()
             for column in table.columns
         ]
 
-    date_column = None
-    yield_column = None
+        date_column = None
+        ten_year_column = None
 
-    for column in table.columns:
+        for column in columns:
 
-        name = str(column)
+            if (
+                date_column is None
+                and column.lower() == "date"
+            ):
+
+                date_column = column
+
+            if (
+                ten_year_column is None
+                and "10 Yr" in column
+            ):
+
+                ten_year_column = column
 
         if (
-            date_column is None
-            and "Date" in name
+            date_column is not None
+            and ten_year_column is not None
         ):
 
-            date_column = column
+            valid_tables.append(
+                (
+                    table,
+                    date_column,
+                    ten_year_column,
+                )
+            )
 
-        if (
-            yield_column is None
-            and "10 Yr" in name
-        ):
-
-            yield_column = column
-
-    if (
-        date_column is None
-        or yield_column is None
-    ):
+    if not valid_tables:
 
         raise RuntimeError(
-            "Treasury Date or 10 Yr "
-            "column could not be identified."
+            "Could not find a Treasury table "
+            "containing Date and 10 Yr."
         )
 
-    table[yield_column] = pd.to_numeric(
-        table[yield_column],
+    # Use the table containing the most
+    # recent valid date, rather than simply
+    # taking the last table returned.
+
+    best = None
+
+    for table, date_col, yield_col in valid_tables:
+
+        dates = pd.to_datetime(
+            table[date_col],
+            errors="coerce",
+        )
+
+        if dates.notna().any():
+
+            newest = dates.max()
+
+            if (
+                best is None
+                or newest > best[0]
+            ):
+
+                best = (
+                    newest,
+                    table,
+                    date_col,
+                    yield_col,
+                )
+
+    if best is None:
+
+        raise RuntimeError(
+            "Treasury tables contained no "
+            "usable dates."
+        )
+
+    _, table, date_col, yield_col = best
+
+    table = table.copy()
+
+    table["_date"] = pd.to_datetime(
+        table[date_col],
+        errors="coerce",
+    )
+
+    table["_yield"] = pd.to_numeric(
+        table[yield_col],
         errors="coerce",
     )
 
     table = table.dropna(
-        subset=[yield_column]
+        subset=[
+            "_date",
+            "_yield",
+        ]
     )
+
+    # Only accept realistic 10Y yields.
+    # This also protects against accidentally
+    # reading another numeric column.
+
+    table = table[
+        (table["_yield"] >= 0)
+        & (table["_yield"] <= 15)
+    ]
 
     if table.empty:
 
         raise RuntimeError(
-            "No valid Treasury 10-year "
-            "values were found."
+            "No realistic Treasury 10-year "
+            "yield was found."
         )
 
-    latest = table.iloc[-1]
+    latest = (
+        table
+        .sort_values("_date")
+        .iloc[-1]
+    )
 
     yield_value = float(
-        latest[yield_column]
+        latest["_yield"]
     )
 
-    treasury_date = str(
-        latest[date_column]
+    treasury_date = (
+        latest["_date"]
+        .strftime("%Y-%m-%d")
     )
 
-    retrieved = now_utc()
+    retrieved = iso_utc()
 
     print(
         f"10Y Treasury: "
-        f"{yield_value:.2f}%"
+        f"{yield_value:.3f}%"
     )
 
     print(
-        f"Treasury date: "
+        f"Treasury observation date: "
         f"{treasury_date}"
     )
 
@@ -348,6 +481,140 @@ def get_treasury():
 
         "treasury_retrieved_at_utc":
             retrieved,
+    }
+
+
+# ============================================================
+# DXY
+# ============================================================
+
+def get_dxy():
+
+    print(
+        "Requesting DXY data..."
+    )
+
+    response = requests.get(
+        DXY_URL,
+        headers=HEADERS,
+        timeout=30,
+    )
+
+    response.raise_for_status()
+
+    html = response.text
+
+    dxy = None
+    dxy_pct = None
+
+    # MarketWatch page patterns.
+
+    price_patterns = [
+
+        r'"value"\s*:\s*"?(9[0-9](?:\.[0-9]+)?)"?',
+
+        r'"last"\s*:\s*"?(9[0-9](?:\.[0-9]+)?)"?',
+
+        r'"price"\s*:\s*"?(9[0-9](?:\.[0-9]+)?)"?',
+
+    ]
+
+    for pattern in price_patterns:
+
+        matches = re.findall(
+            pattern,
+            html,
+            re.IGNORECASE,
+        )
+
+        for match in matches:
+
+            candidate = parse_number(
+                match
+            )
+
+            if (
+                candidate is not None
+                and 80 <= candidate <= 120
+            ):
+
+                dxy = candidate
+                break
+
+        if dxy is not None:
+            break
+
+    pct_patterns = [
+
+        r'"changePercent"\s*:\s*"?(?:\+)?(-?[0-9]+(?:\.[0-9]+)?)%?"?',
+
+        r'"percentChange"\s*:\s*"?(?:\+)?(-?[0-9]+(?:\.[0-9]+)?)%?"?',
+
+    ]
+
+    for pattern in pct_patterns:
+
+        matches = re.findall(
+            pattern,
+            html,
+            re.IGNORECASE,
+        )
+
+        for match in matches:
+
+            candidate = parse_number(
+                match
+            )
+
+            if (
+                candidate is not None
+                and abs(candidate) <= 10
+            ):
+
+                dxy_pct = candidate
+                break
+
+        if dxy_pct is not None:
+            break
+
+    if dxy is None:
+
+        raise RuntimeError(
+            "DXY page responded, but the "
+            "DXY value could not be identified."
+        )
+
+    retrieved = iso_utc()
+
+    print(
+        f"DXY: {dxy:.3f}"
+    )
+
+    if dxy_pct is not None:
+
+        print(
+            f"DXY change: "
+            f"{dxy_pct:+.2f}%"
+        )
+
+    else:
+
+        print(
+            "DXY change: unavailable"
+        )
+
+    return {
+        "dxy_price":
+            dxy,
+
+        "dxy_pct":
+            dxy_pct,
+
+        "dxy_retrieved_at_utc":
+            retrieved,
+
+        "dxy_source":
+            DXY_URL,
     }
 
 
@@ -389,14 +656,11 @@ def github_get_history():
         timeout=30,
     )
 
-    # 404 means this is a brand-new
-    # history file.
-
     if response.status_code == 404:
 
         print(
-            "prediction_history.csv "
-            "does not exist yet."
+            "No prediction history exists. "
+            "Creating a new one."
         )
 
         return (
@@ -422,19 +686,10 @@ def github_get_history():
     )
 
 
-# ============================================================
-# SAVE HISTORY
-# ============================================================
-
 def github_save_history(
     dataframe,
     sha,
 ):
-
-    print(
-        "Saving prediction_history.csv "
-        "to GitHub..."
-    )
 
     csv_bytes = dataframe.to_csv(
         index=False
@@ -461,9 +716,6 @@ def github_save_history(
             "main",
     }
 
-    # Only send SHA when updating an
-    # existing file.
-
     if sha is not None:
 
         payload["sha"] = sha
@@ -477,68 +729,43 @@ def github_save_history(
 
     response.raise_for_status()
 
-    result = response.json()
-
     print(
-        "GitHub save successful."
-    )
-
-    print(
-        "Commit:"
-        f" {result.get('commit', {}).get('sha', 'unknown')}"
+        "GitHub prediction history updated."
     )
 
 
 # ============================================================
-# MAIN COLLECTION
+# MAIN
 # ============================================================
 
 def main():
 
     print(
-        "======================================"
+        "=========================================="
     )
 
     print(
-        "Gold Market Monitor"
+        "GOLD MARKET MONITOR - COLLECTION"
     )
 
     print(
-        "Starting market collection..."
+        "=========================================="
     )
-
-    print(
-        "======================================"
-    )
-
-    # --------------------------------------------------------
-    # Collect Gold
-    # --------------------------------------------------------
 
     gold = get_webull_gold()
 
-    # --------------------------------------------------------
-    # Collect Treasury
-    # --------------------------------------------------------
-
     treasury = get_treasury()
 
-    # --------------------------------------------------------
-    # Load existing history if available
-    # --------------------------------------------------------
+    dxy = get_dxy()
 
     history, sha = (
         github_get_history()
     )
 
-    # --------------------------------------------------------
-    # Build new record
-    # --------------------------------------------------------
-
     record = {
 
         "collected_at_utc":
-            now_utc(),
+            iso_utc(),
 
         "gold_price":
             gold["gold_price"],
@@ -560,6 +787,20 @@ def main():
         "contract_name":
             gold["contract_name"],
 
+        "dxy_price":
+            dxy["dxy_price"],
+
+        "dxy_pct":
+            dxy["dxy_pct"],
+
+        "dxy_retrieved_at_utc":
+            dxy[
+                "dxy_retrieved_at_utc"
+            ],
+
+        "dxy_source":
+            dxy["dxy_source"],
+
         "treasury_yield":
             treasury[
                 "treasury_yield"
@@ -580,27 +821,17 @@ def main():
         [record]
     )
 
-    # --------------------------------------------------------
-    # Create or extend history
-    # --------------------------------------------------------
-
     if history.empty:
 
         history = new_row
 
     else:
 
-        # Add any new columns to the
-        # existing history.
-
         for column in new_row.columns:
 
             if column not in history.columns:
 
                 history[column] = None
-
-        # Add missing legacy columns
-        # to the new record.
 
         for column in history.columns:
 
@@ -620,17 +851,13 @@ def main():
             ignore_index=True,
         )
 
-    # --------------------------------------------------------
-    # Save
-    # --------------------------------------------------------
-
     github_save_history(
         history,
         sha,
     )
 
     print(
-        "======================================"
+        "=========================================="
     )
 
     print(
@@ -642,22 +869,27 @@ def main():
     )
 
     print(
-        f"Gold %: "
-        f"{gold['gold_pct']}"
+        f"Gold %: {gold['gold_pct']}"
     )
 
     print(
-        f"10Y: "
-        f"{treasury['treasury_yield']:.2f}%"
+        f"DXY: {dxy['dxy_price']:.3f}"
     )
 
     print(
-        f"Rows in history: "
-        f"{len(history)}"
+        f"DXY %: {dxy['dxy_pct']}"
     )
 
     print(
-        "======================================"
+        f"10Y: {treasury['treasury_yield']:.3f}%"
+    )
+
+    print(
+        f"Rows: {len(history)}"
+    )
+
+    print(
+        "=========================================="
     )
 
 
